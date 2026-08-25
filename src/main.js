@@ -72,6 +72,7 @@ function createWindow() {
     maxWidth: WINDOW_WIDTH,
     minHeight: WINDOW_HEIGHT,
     maxHeight: WINDOW_HEIGHT,
+    icon: path.join(__dirname, "..", "build", "icon.ico"),
     show: false,
     frame: false,
     resizable: false,
@@ -808,6 +809,9 @@ if (gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === "win32") {
+      app.setAppUserModelId("com.clarityaiassistant.desktop");
+    }
     settings = loadSettings();
     createWindow();
 

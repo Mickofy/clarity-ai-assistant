@@ -3,6 +3,7 @@
   "productName": "Clarity AI Assistant",
   "version": "1.0.0",
   "description": "A private desktop writing assistant for clear, professional communication.",
+  "author": "Micko",
   "main": "src/main.js",
   "private": true,
   "scripts": {
@@ -24,14 +25,17 @@
     "productName": "Clarity AI Assistant",
     "asar": true,
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "src/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "artifactName": "${productName} Setup ${version}.${ext}",
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -48,6 +52,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Clarity AI Assistant",
       "uninstallDisplayName": "Clarity AI Assistant",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "deleteAppDataOnUninstall": false
     }
   }
