@@ -5,7 +5,6 @@ const {
   clipboard,
   ipcMain,
   screen,
-  dialog,
 } = require("electron");
 
 const { execFile } = require("child_process");
@@ -33,7 +32,7 @@ const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 let updaterConfigured = false;
 let updateCheckTimeout = null;
 let updateCheckInterval = null;
-let updatePromptOpen = false;
+let updateReadyInfo = null;
 
 const WINDOW_WIDTH = 860;
 const WINDOW_HEIGHT = 760;
@@ -739,53 +738,58 @@ function sanitizeUpdaterError(error) {
   return message.split(CLARITY_UPDATE_TOKEN).join("[REDACTED]");
 }
 
-async function showUpdateReadyPrompt(info) {
-  if (updatePromptOpen) {
-    return;
+async function showUpdateReadyUi(info) {
+  updateReadyInfo = {
+    version:
+      typeof info?.version === "string" && info.version.trim()
+        ? info.version.trim()
+        : null,
+  };
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
   }
 
-  updatePromptOpen = true;
+  await waitForRendererReady();
 
-  try {
-    const options = {
-      type: "info",
-      title: "Clarity Update Ready",
-      message: `Clarity AI Assistant ${info?.version || "update"} is ready to install.`,
-      detail:
-        "Restart Clarity now to finish installing the update. You can also choose Later and continue working.",
-      buttons: ["Later", "Restart & Update"],
-      defaultId: 1,
-      cancelId: 0,
-      noLink: true,
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  placeWindow();
+  mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.focus();
+
+  mainWindow.webContents.send("update-ready", {
+    version: updateReadyInfo.version || app.getVersion(),
+  });
+}
+
+function installDownloadedUpdate() {
+  if (!updateReadyInfo) {
+    return {
+      ok: false,
+      error: "No downloaded update is ready to install.",
     };
-
-    let result;
-
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-      result = await dialog.showMessageBox(mainWindow, options);
-    } else {
-      result = await dialog.showMessageBox(options);
-    }
-
-    if (result.response === 1) {
-      /*
-        Let the dialog close cleanly before electron-updater quits Clarity
-        and launches the NSIS installer.
-      */
-      setImmediate(() => {
-        try {
-          autoUpdater.quitAndInstall(false, true);
-        } catch (error) {
-          console.warn(
-            "Could not restart Clarity for update:",
-            sanitizeUpdaterError(error),
-          );
-        }
-      });
-    }
-  } finally {
-    updatePromptOpen = false;
   }
+
+  /*
+    Return to the renderer first, then let electron-updater quit Clarity
+    and launch the NSIS installer on the next turn of the event loop.
+  */
+  setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (error) {
+      console.warn(
+        "Could not restart Clarity for update:",
+        sanitizeUpdaterError(error),
+      );
+    }
+  });
+
+  return { ok: true };
 }
 
 function configureAutoUpdater() {
@@ -853,9 +857,9 @@ function configureAutoUpdater() {
       `Clarity update downloaded: ${info?.version || "new version"}.`,
     );
 
-    showUpdateReadyPrompt(info).catch((error) => {
+    showUpdateReadyUi(info).catch((error) => {
       console.warn(
-        "Could not show update-ready prompt:",
+        "Could not show Clarity update UI:",
         sanitizeUpdaterError(error),
       );
     });
@@ -1100,6 +1104,18 @@ if (gotSingleInstanceLock) {
     });
 
     ipcMain.handle("get-settings", () => settings);
+
+    ipcMain.handle("get-app-info", () => {
+      return {
+        name: app.getName(),
+        version: app.getVersion(),
+        developer: "Mickofy",
+      };
+    });
+
+    ipcMain.handle("install-update", () => {
+      return installDownloadedUpdate();
+    });
 
     ipcMain.handle("save-settings", (_event, candidate) => {
       const nextSettings = {

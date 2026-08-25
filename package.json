@@ -1,7 +1,7 @@
 {
   "name": "clarity-ai-assistant",
   "productName": "Clarity AI Assistant",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A private desktop writing assistant for clear, professional communication.",
   "author": "Micko",
   "main": "src/main.js",

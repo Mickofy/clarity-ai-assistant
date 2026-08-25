@@ -25,92 +25,72 @@ const noticeMessage = document.getElementById("noticeMessage");
 const loadingTitle = document.getElementById("loadingTitle");
 
 const writingResultEyebrow = document.getElementById("writingResultEyebrow");
-
 const writingResultTitle = document.getElementById("writingResultTitle");
 
 const intentCard = document.getElementById("intentCard");
 const intentSummary = document.getElementById("intentSummary");
 
 const clarificationCard = document.getElementById("clarificationCard");
-
 const clarificationQuestion = document.getElementById("clarificationQuestion");
 
 const suggestionCard = document.getElementById("suggestionCard");
-
 const suggestionText = document.getElementById("suggestionText");
 
 const copySuggestionBtn = document.getElementById("copySuggestionBtn");
-
 const replaceSuggestionBtn = document.getElementById("replaceSuggestionBtn");
 
 const simpleMeaning = document.getElementById("simpleMeaning");
-
 const whatTheyWantCard = document.getElementById("whatTheyWantCard");
-
 const whatTheyWant = document.getElementById("whatTheyWant");
 
 const termsCard = document.getElementById("termsCard");
-
 const termsList = document.getElementById("termsList");
 
 const ambiguityCard = document.getElementById("ambiguityCard");
-
 const ambiguityNote = document.getElementById("ambiguityNote");
 
 const helpReplyBtn = document.getElementById("helpReplyBtn");
 
 const clientContext = document.getElementById("clientContext");
-
 const roughReply = document.getElementById("roughReply");
 
 const createReplyBtn = document.getElementById("createReplyBtn");
-
 const conversationCount = document.getElementById("conversationCount");
-
 const clearConversationBtn = document.getElementById("clearConversationBtn");
 
 const defaultInputSource = document.getElementById("defaultInputSource");
-
 const explanationLanguage = document.getElementById("explanationLanguage");
 
+const appVersion = document.getElementById("appVersion");
+const appDeveloper = document.getElementById("appDeveloper");
+
 const drawerToggleBtn = document.getElementById("drawerToggleBtn");
-
 const drawerCloseBtn = document.getElementById("drawerCloseBtn");
-
 const utilityDrawer = document.getElementById("utilityDrawer");
-
 const drawerBackdrop = document.getElementById("drawerBackdrop");
-
 const drawerNotice = document.getElementById("drawerNotice");
 
+const updateDialog = document.getElementById("updateDialog");
+const updateVersion = document.getElementById("updateVersion");
+const updateLaterBtn = document.getElementById("updateLaterBtn");
+const restartUpdateBtn = document.getElementById("restartUpdateBtn");
+const updateError = document.getElementById("updateError");
+
 const minimizeBtn = document.getElementById("minimizeBtn");
-
 const closeBtn = document.getElementById("closeBtn");
-
-/* =========================================================
-   DEFAULT SETTINGS
-   ========================================================= */
 
 const DEFAULT_SETTINGS = {
   shortcuts: {
     openAssistant: "CommandOrControl+Alt+F",
-
     quickGrammar: "CommandOrControl+Alt+R",
-
     quickUnderstand: "CommandOrControl+Alt+U",
   },
 
   defaultInputSource: "selected",
-
   understandExplanation: "simple_english",
 };
 
-/* =========================================================
-   STATE
-   ========================================================= */
-
 let currentView = "main";
-
 let currentSource = "selected";
 
 let currentSettings = structuredClone(DEFAULT_SETTINGS);
@@ -126,18 +106,71 @@ let sourceInitialized = {
 };
 
 let capturingShortcut = null;
-
 let currentWritingMode = null;
-
 let pendingClientContext = "";
 
 let conversationHistory = [];
-
 let drawerOpen = false;
+let pendingUpdateVersion = null;
 
-/* =========================================================
-   VIEWS
-   ========================================================= */
+let sourceScrollbarDragging = false;
+let sourceScrollbarPointerId = null;
+let sourceScrollbarDragStartY = 0;
+let sourceScrollbarDragStartScrollTop = 0;
+
+async function loadAppInfo() {
+  try {
+    const info = await window.writingAssistant.getAppInfo();
+
+    if (appVersion) {
+      appVersion.textContent = info?.version || "—";
+    }
+
+    if (appDeveloper) {
+      appDeveloper.textContent = info?.developer || "Mickofy";
+    }
+  } catch {
+    if (appVersion) appVersion.textContent = "—";
+    if (appDeveloper) appDeveloper.textContent = "Mickofy";
+  }
+}
+
+function clearUpdateError() {
+  if (!updateError) return;
+
+  updateError.textContent = "";
+  updateError.classList.add("hidden");
+}
+
+function closeUpdateDialog() {
+  clearUpdateError();
+
+  if (updateDialog?.open) {
+    updateDialog.close();
+  }
+}
+
+function openUpdateDialog(payload) {
+  pendingUpdateVersion = payload?.version || null;
+
+  if (updateVersion) {
+    updateVersion.textContent = pendingUpdateVersion
+      ? `v${pendingUpdateVersion}`
+      : "NEW VERSION";
+  }
+
+  clearUpdateError();
+
+  if (!updateDialog) return;
+
+  if (!updateDialog.open) {
+    updateDialog.showModal();
+  }
+
+  requestAnimationFrame(() => {
+    restartUpdateBtn?.focus();
+  });
+}
 
 function showView(name) {
   Object.entries(views).forEach(([key, view]) => {
@@ -150,29 +183,13 @@ function showView(name) {
 
   currentView = name;
 
-  /*
-    The source textarea may have been hidden while
-    another view was active.
-
-    Recalculate the custom scrollbar after returning
-    to the main view.
-  */
-  if (name === "main") {
-    scheduleSourceScrollbarUpdate();
-  }
-
   if (name !== "main") {
     hideNotice();
   }
 }
 
-/* =========================================================
-   NOTICE
-   ========================================================= */
-
 function showNotice(title, message) {
   noticeTitle.textContent = title;
-
   noticeMessage.textContent = message;
 
   notice.classList.remove("hidden");
@@ -182,42 +199,29 @@ function hideNotice() {
   notice.classList.add("hidden");
 }
 
-/* =========================================================
-   DRAWER NOTICE
-   ========================================================= */
-
 function showDrawerNotice(message) {
   drawerNotice.textContent = message;
-
   drawerNotice.classList.remove("hidden");
 }
 
 function hideDrawerNotice() {
   drawerNotice.textContent = "";
-
   drawerNotice.classList.add("hidden");
 }
-
-/* =========================================================
-   DRAWER
-   ========================================================= */
 
 function setDrawer(open) {
   drawerOpen = Boolean(open);
 
   utilityDrawer.classList.toggle("open", drawerOpen);
-
   drawerBackdrop.classList.toggle("open", drawerOpen);
 
   utilityDrawer.setAttribute("aria-hidden", String(!drawerOpen));
-
   drawerBackdrop.setAttribute("aria-hidden", String(!drawerOpen));
 
   drawerToggleBtn.setAttribute("aria-expanded", String(drawerOpen));
 
   if (!drawerOpen) {
     hideDrawerNotice();
-
     capturingShortcut = null;
 
     document
@@ -228,68 +232,42 @@ function setDrawer(open) {
   }
 }
 
-/* =========================================================
-   CHARACTER COUNT
-   ========================================================= */
-
 function updateCharCount() {
   charCount.textContent = `${sourceText.value.length.toLocaleString()} / 12,000`;
 }
 
-/* =========================================================
-   CUSTOM SOURCE SCROLLBAR
-   ========================================================= */
-
 function updateSourceScrollbar() {
-  if (!sourceText || !sourceScrollbar || !sourceScrollThumb) {
+  if (!sourceScrollbar || !sourceScrollThumb || !sourceText) {
     return;
   }
-
-  const scrollHeight = sourceText.scrollHeight;
 
   const clientHeight = sourceText.clientHeight;
+  const scrollHeight = sourceText.scrollHeight;
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
 
-  /*
-    Determine whether the textarea actually
-    contains more content than it can display.
-  */
-  const canScroll = scrollHeight > clientHeight + 1;
-
-  sourceScrollbar.classList.toggle("visible", canScroll);
-
-  /*
-    If there is nothing to scroll, hide the
-    thumb completely.
-  */
-  if (!canScroll) {
-    sourceScrollThumb.style.height = "0px";
-
+  if (maxScrollTop <= 1) {
+    sourceScrollbar.classList.remove("visible");
+    sourceScrollThumb.style.height = "";
     sourceScrollThumb.style.transform = "translateX(-50%) translateY(0px)";
-
     return;
   }
 
+  sourceScrollbar.classList.add("visible");
+
   const trackHeight = sourceScrollbar.clientHeight;
+  const minimumThumbHeight = 34;
 
-  /*
-    The larger the visible portion of the text,
-    the larger the thumb should be.
-  */
-  const visibleRatio = clientHeight / scrollHeight;
+  const calculatedThumbHeight = trackHeight * (clientHeight / scrollHeight);
 
-  /*
-    Never let the thumb become too tiny.
-  */
-  const thumbHeight = Math.max(34, trackHeight * visibleRatio);
+  const thumbHeight = Math.min(
+    trackHeight,
+    Math.max(minimumThumbHeight, calculatedThumbHeight),
+  );
 
   const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
 
-  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
-
-  const scrollRatio =
-    maxScrollTop > 0 ? sourceText.scrollTop / maxScrollTop : 0;
-
-  const thumbTop = maxThumbTop * scrollRatio;
+  const thumbTop =
+    maxScrollTop > 0 ? (sourceText.scrollTop / maxScrollTop) * maxThumbTop : 0;
 
   sourceScrollThumb.style.height = `${thumbHeight}px`;
 
@@ -297,22 +275,38 @@ function updateSourceScrollbar() {
 }
 
 function scheduleSourceScrollbarUpdate() {
-  requestAnimationFrame(updateSourceScrollbar);
+  requestAnimationFrame(() => {
+    updateSourceScrollbar();
+  });
 }
 
-/* =========================================================
-   INPUT STATUS
-   ========================================================= */
+function stopSourceScrollbarDrag(event) {
+  if (!sourceScrollbarDragging) {
+    return;
+  }
+
+  sourceScrollbarDragging = false;
+  sourceScrollThumb?.classList.remove("dragging");
+
+  if (
+    sourceScrollThumb &&
+    sourceScrollbarPointerId !== null &&
+    sourceScrollThumb.hasPointerCapture?.(sourceScrollbarPointerId)
+  ) {
+    try {
+      sourceScrollThumb.releasePointerCapture(sourceScrollbarPointerId);
+    } catch {}
+  }
+
+  sourceScrollbarPointerId = null;
+
+  event?.preventDefault?.();
+}
 
 function setInputStatus(label, ready = false) {
   inputStatusText.textContent = label;
-
   inputStatus.classList.toggle("ready", ready);
 }
-
-/* =========================================================
-   SOURCE TABS
-   ========================================================= */
 
 function updateSourceTabs() {
   selectedSourceBtn.classList.toggle("active", currentSource === "selected");
@@ -320,39 +314,24 @@ function updateSourceTabs() {
   clipboardSourceBtn.classList.toggle("active", currentSource === "clipboard");
 }
 
-/* =========================================================
-   LOAD SOURCE BUFFER
-   ========================================================= */
-
 function loadCurrentSourceBuffer() {
   sourceText.value = sourceBuffers[currentSource] || "";
 
   updateCharCount();
-
-  /*
-    Recalculate after programmatically inserting
-    Selected or Clipboard text.
-  */
   scheduleSourceScrollbarUpdate();
 
   if (currentSource === "selected") {
     setInputStatus(
       sourceText.value ? "SELECTION CAPTURED" : "NO SELECTION",
-
       Boolean(sourceText.value),
     );
   } else {
     setInputStatus(
       sourceText.value ? "CLIPBOARD LOADED" : "CLIPBOARD EMPTY",
-
       Boolean(sourceText.value),
     );
   }
 }
-
-/* =========================================================
-   REFRESH INPUT
-   ========================================================= */
 
 async function refreshInput(source = currentSource) {
   hideNotice();
@@ -361,14 +340,12 @@ async function refreshInput(source = currentSource) {
 
   setInputStatus(
     source === "selected" ? "REFRESHING SELECTION…" : "REFRESHING CLIPBOARD…",
-
     false,
   );
 
   const result = await window.writingAssistant.refreshInput(source);
 
   refreshBtn.disabled = false;
-
   sourceInitialized[source] = true;
 
   if (!result?.ok || !result?.text) {
@@ -404,10 +381,6 @@ async function refreshInput(source = currentSource) {
   return true;
 }
 
-/* =========================================================
-   SWITCH SOURCE
-   ========================================================= */
-
 async function switchSource(source) {
   if (!["selected", "clipboard"].includes(source)) {
     return;
@@ -417,26 +390,16 @@ async function switchSource(source) {
     return;
   }
 
-  /*
-    Save any manual edits from the source we are
-    leaving before switching.
-  */
   sourceBuffers[currentSource] = sourceText.value;
-
   sourceInitialized[currentSource] = true;
 
   currentSource = source;
 
   updateSourceTabs();
 
-  /*
-    IMPORTANT:
-
-    Switching back to Selected does NOT automatically
-    capture selection again.
-
-    This prevents focus/hide/show flashing.
-  */
+  // IMPORTANT:
+  // Switching back to Selected no longer triggers a capture.
+  // This prevents the hide/show or focus flash the user was seeing.
   if (source === "selected") {
     loadCurrentSourceBuffer();
 
@@ -452,15 +415,10 @@ async function switchSource(source) {
     return;
   }
 
-  /*
-    Clipboard can be loaded safely without changing
-    focus.
-
-    Load automatically the first time only.
-  */
+  // Clipboard is safe to read without changing focus, so on its first use
+  // we load it automatically. Later tab switches preserve manual edits.
   if (!sourceInitialized.clipboard) {
     await refreshInput("clipboard");
-
     return;
   }
 
@@ -475,10 +433,6 @@ async function switchSource(source) {
     hideNotice();
   }
 }
-
-/* =========================================================
-   LOADING
-   ========================================================= */
 
 function setLoading(mode) {
   const messages = {
@@ -496,27 +450,15 @@ function setLoading(mode) {
   showView("loading");
 }
 
-/* =========================================================
-   RESET WRITING RESULT
-   ========================================================= */
-
 function resetWritingResult() {
   intentCard.classList.add("hidden");
-
   clarificationCard.classList.add("hidden");
-
   suggestionCard.classList.remove("hidden");
 
   intentSummary.textContent = "";
-
   clarificationQuestion.textContent = "";
-
   suggestionText.value = "";
 }
-
-/* =========================================================
-   RENDER WRITING RESULT
-   ========================================================= */
 
 function renderWritingResult(mode, result) {
   resetWritingResult();
@@ -534,7 +476,6 @@ function renderWritingResult(mode, result) {
   const [eyebrow, title] = labels[mode] || labels.express;
 
   writingResultEyebrow.textContent = eyebrow;
-
   writingResultTitle.textContent = title;
 
   if (
@@ -567,10 +508,6 @@ function renderWritingResult(mode, result) {
 
   showView("writingResult");
 }
-
-/* =========================================================
-   RENDER UNDERSTAND RESULT
-   ========================================================= */
 
 function renderUnderstandResult(result) {
   simpleMeaning.textContent =
@@ -617,10 +554,6 @@ function renderUnderstandResult(result) {
   showView("understandResult");
 }
 
-/* =========================================================
-   CONVERSATION CONTEXT
-   ========================================================= */
-
 function buildConversationContext(latestClientText) {
   const recent = conversationHistory.slice(-6);
 
@@ -640,14 +573,8 @@ function buildConversationContext(latestClientText) {
 }
 
 function updateConversationCount() {
-  conversationCount.textContent = `SESSION CONTEXT: ${
-    conversationHistory.length
-  } MESSAGE${conversationHistory.length === 1 ? "" : "S"}`;
+  conversationCount.textContent = `SESSION CONTEXT: ${conversationHistory.length} MESSAGE${conversationHistory.length === 1 ? "" : "S"}`;
 }
-
-/* =========================================================
-   RUN MODE
-   ========================================================= */
 
 async function runMode(mode) {
   sourceBuffers[currentSource] = sourceText.value;
@@ -667,10 +594,6 @@ async function runMode(mode) {
     return;
   }
 
-  /*
-    Client Reply first opens the rough reply screen
-    instead of immediately calling the API.
-  */
   if (mode === "client_reply") {
     pendingClientContext = text;
 
@@ -701,7 +624,6 @@ async function runMode(mode) {
 
     showNotice(
       "Could not process the text",
-
       response?.error || "Try again in a moment.",
     );
 
@@ -714,10 +636,6 @@ async function runMode(mode) {
     renderWritingResult(mode, response.result);
   }
 }
-
-/* =========================================================
-   CREATE CLIENT REPLY
-   ========================================================= */
 
 async function createClientReply() {
   const text = roughReply.value.trim();
@@ -742,7 +660,6 @@ async function createClientReply() {
   const response = await window.writingAssistant.improveText({
     text,
     context,
-
     mode: "client_reply",
 
     explanationLanguage: currentSettings.understandExplanation,
@@ -753,7 +670,6 @@ async function createClientReply() {
 
     showNotice(
       "Could not create the reply",
-
       response?.error || "Try again in a moment.",
     );
 
@@ -762,10 +678,6 @@ async function createClientReply() {
 
   renderWritingResult("client_reply", response.result);
 }
-
-/* =========================================================
-   COMMIT CONVERSATION
-   ========================================================= */
 
 function commitConversationReply(finalText) {
   if (currentWritingMode !== "client_reply" || !finalText.trim()) {
@@ -777,14 +689,12 @@ function commitConversationReply(finalText) {
   if (clientText) {
     conversationHistory.push({
       role: "client",
-
       text: clientText,
     });
   }
 
   conversationHistory.push({
     role: "user",
-
     text: finalText.trim(),
   });
 
@@ -795,17 +705,9 @@ function commitConversationReply(finalText) {
   updateConversationCount();
 }
 
-/* =========================================================
-   SHORTCUT DISPLAY
-   ========================================================= */
-
 function displayShortcut(accelerator) {
   return accelerator.replace("CommandOrControl", "Ctrl").replaceAll("+", " + ");
 }
-
-/* =========================================================
-   SETTINGS UI
-   ========================================================= */
 
 function updateSettingsUi() {
   document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
@@ -820,10 +722,6 @@ function updateSettingsUi() {
     currentSettings.understandExplanation || "simple_english";
 }
 
-/* =========================================================
-   SAVE SETTINGS
-   ========================================================= */
-
 async function saveSettings(partial) {
   hideDrawerNotice();
 
@@ -833,7 +731,6 @@ async function saveSettings(partial) {
 
     shortcuts: {
       ...currentSettings.shortcuts,
-
       ...(partial?.shortcuts || {}),
     },
   };
@@ -854,10 +751,6 @@ async function saveSettings(partial) {
 
   return true;
 }
-
-/* =========================================================
-   ACCELERATOR FROM KEY EVENT
-   ========================================================= */
 
 function acceleratorFromEvent(event) {
   const parts = [];
@@ -891,10 +784,7 @@ function acceleratorFromEvent(event) {
   return parts.length >= 2 ? parts.join("+") : null;
 }
 
-/* =========================================================
-   MAIN ACTION BUTTONS
-   ========================================================= */
-
+/* Main action buttons */
 document.getElementById("actionList").addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
 
@@ -903,23 +793,12 @@ document.getElementById("actionList").addEventListener("click", (event) => {
   }
 });
 
-/* =========================================================
-   INPUT SOURCE SELECTOR
-   ========================================================= */
-
+/* Input source selector */
 selectedSourceBtn.addEventListener("click", () => switchSource("selected"));
 
 clipboardSourceBtn.addEventListener("click", () => switchSource("clipboard"));
 
-/* =========================================================
-   REFRESH
-   ========================================================= */
-
 refreshBtn.addEventListener("click", () => refreshInput(currentSource));
-
-/* =========================================================
-   SOURCE TEXT INPUT
-   ========================================================= */
 
 sourceText.addEventListener("input", () => {
   sourceBuffers[currentSource] = sourceText.value;
@@ -927,11 +806,6 @@ sourceText.addEventListener("input", () => {
   sourceInitialized[currentSource] = true;
 
   updateCharCount();
-
-  /*
-      Recalculate custom scrollbar whenever the user
-      types, pastes or deletes content.
-    */
   scheduleSourceScrollbarUpdate();
 
   if (sourceText.value.trim()) {
@@ -939,160 +813,108 @@ sourceText.addEventListener("input", () => {
   }
 });
 
-/* =========================================================
-   SOURCE SCROLL
-   ========================================================= */
+sourceText.addEventListener("scroll", updateSourceScrollbar, { passive: true });
 
-sourceText.addEventListener("scroll", updateSourceScrollbar);
-
-/* =========================================================
-   CUSTOM SCROLLBAR INTERACTION
-   ========================================================= */
-
-if (sourceScrollbar && sourceScrollThumb) {
-  let sourceScrollbarDragging = false;
-
-  let sourceScrollbarStartY = 0;
-
-  let sourceScrollbarStartScrollTop = 0;
-
-  /* -------------------------------------------------------
-     START DRAGGING THUMB
-     ------------------------------------------------------- */
-
-  sourceScrollThumb.addEventListener("pointerdown", (event) => {
-    sourceScrollbarDragging = true;
-
-    sourceScrollbarStartY = event.clientY;
-
-    sourceScrollbarStartScrollTop = sourceText.scrollTop;
-
-    sourceScrollThumb.classList.add("dragging");
-
-    sourceScrollThumb.setPointerCapture(event.pointerId);
-
-    event.preventDefault();
-    event.stopPropagation();
-  });
-
-  /* -------------------------------------------------------
-     DRAG THUMB
-     ------------------------------------------------------- */
-
-  sourceScrollThumb.addEventListener("pointermove", (event) => {
-    if (!sourceScrollbarDragging) {
-      return;
-    }
-
-    const trackHeight = sourceScrollbar.clientHeight;
-
-    const thumbHeight = sourceScrollThumb.offsetHeight;
-
-    const availableTrack = trackHeight - thumbHeight;
-
-    const maxScroll = sourceText.scrollHeight - sourceText.clientHeight;
-
-    if (availableTrack <= 0 || maxScroll <= 0) {
-      return;
-    }
-
-    const pointerDelta = event.clientY - sourceScrollbarStartY;
-
-    const scrollDelta = pointerDelta * (maxScroll / availableTrack);
-
-    sourceText.scrollTop = sourceScrollbarStartScrollTop + scrollDelta;
-  });
-
-  /* -------------------------------------------------------
-     STOP DRAGGING
-     ------------------------------------------------------- */
-
-  function stopSourceScrollbarDrag(event) {
-    if (!sourceScrollbarDragging) {
-      return;
-    }
-
-    sourceScrollbarDragging = false;
-
-    sourceScrollThumb.classList.remove("dragging");
-
-    if (sourceScrollThumb.hasPointerCapture(event.pointerId)) {
-      sourceScrollThumb.releasePointerCapture(event.pointerId);
-    }
+sourceScrollThumb?.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) {
+    return;
   }
 
-  sourceScrollThumb.addEventListener("pointerup", stopSourceScrollbarDrag);
+  event.preventDefault();
 
-  sourceScrollThumb.addEventListener("pointercancel", stopSourceScrollbarDrag);
+  sourceScrollbarDragging = true;
+  sourceScrollbarPointerId = event.pointerId;
 
-  /* -------------------------------------------------------
-     CLICK TRACK TO JUMP
-     ------------------------------------------------------- */
+  sourceScrollbarDragStartY = event.clientY;
 
-  sourceScrollbar.addEventListener("pointerdown", (event) => {
-    /*
-        Clicking the thumb itself is already handled
-        by the drag code above.
-      */
-    if (event.target === sourceScrollThumb) {
-      return;
-    }
+  sourceScrollbarDragStartScrollTop = sourceText.scrollTop;
 
-    const rect = sourceScrollbar.getBoundingClientRect();
+  sourceScrollThumb.classList.add("dragging");
 
-    const trackHeight = sourceScrollbar.clientHeight;
+  try {
+    sourceScrollThumb.setPointerCapture(event.pointerId);
+  } catch {}
+});
 
-    const thumbHeight = sourceScrollThumb.offsetHeight;
+sourceScrollThumb?.addEventListener("pointermove", (event) => {
+  if (
+    !sourceScrollbarDragging ||
+    event.pointerId !== sourceScrollbarPointerId
+  ) {
+    return;
+  }
 
-    const availableTrack = trackHeight - thumbHeight;
+  event.preventDefault();
 
-    const maxScroll = sourceText.scrollHeight - sourceText.clientHeight;
+  const trackHeight = sourceScrollbar?.clientHeight || 0;
 
-    if (availableTrack <= 0 || maxScroll <= 0) {
-      return;
-    }
+  const thumbHeight = sourceScrollThumb.offsetHeight;
 
-    /*
-        Center the thumb around the point that
-        the user clicked.
-      */
-    const requestedThumbTop = Math.min(
-      availableTrack,
+  const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
 
-      Math.max(
-        0,
+  const maxScrollTop = Math.max(
+    0,
+    sourceText.scrollHeight - sourceText.clientHeight,
+  );
 
-        event.clientY - rect.top - thumbHeight / 2,
-      ),
-    );
+  if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+    return;
+  }
 
-    sourceText.scrollTop = (requestedThumbTop / availableTrack) * maxScroll;
-  });
-}
+  const deltaY = event.clientY - sourceScrollbarDragStartY;
 
-/* =========================================================
-   WINDOW RESIZE
-   ========================================================= */
+  sourceText.scrollTop =
+    sourceScrollbarDragStartScrollTop + deltaY * (maxScrollTop / maxThumbTop);
+});
+
+sourceScrollThumb?.addEventListener("pointerup", stopSourceScrollbarDrag);
+
+sourceScrollThumb?.addEventListener("pointercancel", stopSourceScrollbarDrag);
+
+sourceScrollbar?.addEventListener("pointerdown", (event) => {
+  if (event.target === sourceScrollThumb) {
+    return;
+  }
+
+  if (event.button !== 0) {
+    return;
+  }
+
+  const rect = sourceScrollbar.getBoundingClientRect();
+
+  const thumbHeight = sourceScrollThumb?.offsetHeight || 0;
+
+  const trackHeight = sourceScrollbar.clientHeight;
+
+  const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+  const maxScrollTop = Math.max(
+    0,
+    sourceText.scrollHeight - sourceText.clientHeight,
+  );
+
+  if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+    return;
+  }
+
+  const desiredThumbTop = Math.max(
+    0,
+    Math.min(maxThumbTop, event.clientY - rect.top - thumbHeight / 2),
+  );
+
+  sourceText.scrollTop = (desiredThumbTop / maxThumbTop) * maxScrollTop;
+
+  updateSourceScrollbar();
+});
 
 window.addEventListener("resize", scheduleSourceScrollbarUpdate);
 
-/* =========================================================
-   BACK BUTTONS
-   ========================================================= */
-
+/* Back buttons */
 document.querySelectorAll("[data-back]").forEach((button) => {
   button.addEventListener("click", () => showView("main"));
 });
 
-/* =========================================================
-   CREATE CLIENT REPLY BUTTON
-   ========================================================= */
-
 createReplyBtn.addEventListener("click", createClientReply);
-
-/* =========================================================
-   COPY SUGGESTION
-   ========================================================= */
 
 copySuggestionBtn.addEventListener("click", async () => {
   const text = suggestionText.value.trim();
@@ -1108,10 +930,6 @@ copySuggestionBtn.addEventListener("click", async () => {
   await window.writingAssistant.hideWindow();
 });
 
-/* =========================================================
-   REPLACE SELECTION
-   ========================================================= */
-
 replaceSuggestionBtn.addEventListener("click", async () => {
   const text = suggestionText.value.trim();
 
@@ -1124,7 +942,6 @@ replaceSuggestionBtn.addEventListener("click", async () => {
   if (!result?.ok) {
     showNotice(
       "Could not replace the selection",
-
       result?.error || "Use Copy instead.",
     );
 
@@ -1133,10 +950,6 @@ replaceSuggestionBtn.addEventListener("click", async () => {
 
   commitConversationReply(text);
 });
-
-/* =========================================================
-   HELP ME REPLY
-   ========================================================= */
 
 helpReplyBtn.addEventListener("click", () => {
   pendingClientContext = sourceText.value.trim();
@@ -1152,10 +965,6 @@ helpReplyBtn.addEventListener("click", () => {
   roughReply.focus();
 });
 
-/* =========================================================
-   CLEAR CONVERSATION
-   ========================================================= */
-
 clearConversationBtn.addEventListener("click", () => {
   conversationHistory = [];
 
@@ -1166,15 +975,45 @@ clearConversationBtn.addEventListener("click", () => {
   }
 });
 
-/* =========================================================
-   WINDOW + DRAWER
-   ========================================================= */
-
+/* Window + drawer */
 drawerToggleBtn.addEventListener("click", () => setDrawer(!drawerOpen));
 
 drawerCloseBtn.addEventListener("click", () => setDrawer(false));
 
 drawerBackdrop.addEventListener("click", () => setDrawer(false));
+
+updateLaterBtn?.addEventListener("click", () => {
+  closeUpdateDialog();
+});
+
+updateDialog?.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeUpdateDialog();
+});
+
+restartUpdateBtn?.addEventListener("click", async () => {
+  clearUpdateError();
+
+  restartUpdateBtn.disabled = true;
+  restartUpdateBtn.textContent = "RESTARTING…";
+
+  try {
+    const result = await window.writingAssistant.installUpdate();
+
+    if (!result?.ok) {
+      throw new Error(result?.error || "Could not start the update.");
+    }
+  } catch (error) {
+    restartUpdateBtn.disabled = false;
+    restartUpdateBtn.textContent = "RESTART UPDATE";
+
+    if (updateError) {
+      updateError.textContent =
+        error?.message || "Could not restart Clarity for the update.";
+      updateError.classList.remove("hidden");
+    }
+  }
+});
 
 minimizeBtn.addEventListener("click", () =>
   window.writingAssistant.minimizeWindow(),
@@ -1182,10 +1021,7 @@ minimizeBtn.addEventListener("click", () =>
 
 closeBtn.addEventListener("click", () => window.writingAssistant.hideWindow());
 
-/* =========================================================
-   SETTINGS
-   ========================================================= */
-
+/* Settings */
 defaultInputSource.addEventListener("change", async () => {
   await saveSettings({
     defaultInputSource: defaultInputSource.value,
@@ -1197,10 +1033,6 @@ explanationLanguage.addEventListener("change", async () => {
     understandExplanation: explanationLanguage.value,
   });
 });
-
-/* =========================================================
-   SHORTCUT CAPTURE BUTTONS
-   ========================================================= */
 
 document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -1216,157 +1048,128 @@ document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
   });
 });
 
-/* =========================================================
-   KEYBOARD
-   ========================================================= */
+/* Keyboard */
+document.addEventListener("keydown", async (event) => {
+  if (updateDialog?.open && event.key === "Escape") {
+    event.preventDefault();
+    closeUpdateDialog();
+    return;
+  }
 
-document.addEventListener(
-  "keydown",
+  if (capturingShortcut) {
+    event.preventDefault();
+    event.stopPropagation();
 
-  async (event) => {
-    /*
-      -------------------------------------------------------
-      Shortcut capture mode
-      -------------------------------------------------------
-    */
-    if (capturingShortcut) {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.key === "Escape") {
-        capturingShortcut = null;
-
-        updateSettingsUi();
-
-        document
-          .querySelectorAll(".shortcut-capture")
-          .forEach((item) => item.classList.remove("capturing"));
-
-        return;
-      }
-
-      const accelerator = acceleratorFromEvent(event);
-
-      if (!accelerator) {
-        return;
-      }
-
-      const key = capturingShortcut;
-
+    if (event.key === "Escape") {
       capturingShortcut = null;
 
-      const success = await saveSettings({
-        shortcuts: {
-          [key]: accelerator,
-        },
-      });
+      updateSettingsUi();
 
       document
         .querySelectorAll(".shortcut-capture")
         .forEach((item) => item.classList.remove("capturing"));
 
-      if (!success) {
-        updateSettingsUi();
-      }
-
       return;
     }
 
-    /*
-      -------------------------------------------------------
-      Escape
-      -------------------------------------------------------
-    */
-    if (event.key === "Escape") {
-      if (drawerOpen) {
-        event.preventDefault();
+    const accelerator = acceleratorFromEvent(event);
 
-        setDrawer(false);
-
-        return;
-      }
-
-      if (currentView === "main") {
-        await window.writingAssistant.hideWindow();
-      } else {
-        showView("main");
-      }
-
+    if (!accelerator) {
       return;
     }
 
-    /*
-      -------------------------------------------------------
-      Ctrl + R
-      -------------------------------------------------------
-    */
-    if (
-      currentView === "main" &&
-      event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === "r"
-    ) {
+    const key = capturingShortcut;
+
+    capturingShortcut = null;
+
+    const success = await saveSettings({
+      shortcuts: {
+        [key]: accelerator,
+      },
+    });
+
+    document
+      .querySelectorAll(".shortcut-capture")
+      .forEach((item) => item.classList.remove("capturing"));
+
+    if (!success) {
+      updateSettingsUi();
+    }
+
+    return;
+  }
+
+  if (event.key === "Escape") {
+    if (drawerOpen) {
+      event.preventDefault();
+      setDrawer(false);
+      return;
+    }
+
+    if (currentView === "main") {
+      await window.writingAssistant.hideWindow();
+    } else {
+      showView("main");
+    }
+
+    return;
+  }
+
+  if (
+    currentView === "main" &&
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === "r"
+  ) {
+    event.preventDefault();
+
+    await refreshInput(currentSource);
+
+    return;
+  }
+
+  if (
+    currentView === "main" &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey
+  ) {
+    const modes = {
+      1: "express",
+      2: "understand",
+      3: "client_reply",
+      4: "grammar",
+    };
+
+    const mode = modes[event.key];
+
+    if (mode) {
       event.preventDefault();
 
-      await refreshInput(currentSource);
+      runMode(mode);
 
       return;
     }
+  }
 
-    /*
-      -------------------------------------------------------
-      Alt + 1 / 2 / 3 / 4
-      -------------------------------------------------------
-    */
-    if (
-      currentView === "main" &&
-      event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey
-    ) {
-      const modes = {
-        1: "express",
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    event.key === "Enter" &&
+    currentView === "clientReply"
+  ) {
+    event.preventDefault();
 
-        2: "understand",
+    createClientReply();
+  }
+});
 
-        3: "client_reply",
+/* When an update has finished downloading */
+window.writingAssistant.onUpdateReady((payload) => {
+  openUpdateDialog(payload);
+});
 
-        4: "grammar",
-      };
-
-      const mode = modes[event.key];
-
-      if (mode) {
-        event.preventDefault();
-
-        runMode(mode);
-
-        return;
-      }
-    }
-
-    /*
-      -------------------------------------------------------
-      Ctrl + Enter in Client Reply
-      -------------------------------------------------------
-    */
-    if (
-      (event.ctrlKey || event.metaKey) &&
-      event.key === "Enter" &&
-      currentView === "clientReply"
-    ) {
-      event.preventDefault();
-
-      createClientReply();
-    }
-  },
-);
-
-/* =========================================================
-   WHEN A GLOBAL SHORTCUT OPENS CLARITY
-   ========================================================= */
-
+/* When a global shortcut opens Clarity */
 window.writingAssistant.onAssistantOpened(async (payload) => {
   setDrawer(false);
 
@@ -1385,18 +1188,11 @@ window.writingAssistant.onAssistantOpened(async (payload) => {
   sourceInitialized[currentSource] = true;
 
   updateSourceTabs();
-
-  /*
-        loadCurrentSourceBuffer() automatically
-        recalculates the custom scrollbar.
-      */
   loadCurrentSourceBuffer();
-
   showView("main");
 
   if (payload?.action && sourceText.value.trim()) {
     runMode(payload.action);
-
     return;
   }
 
@@ -1409,22 +1205,290 @@ window.writingAssistant.onAssistantOpened(async (payload) => {
 });
 
 /* =========================================================
-   INITIAL RENDERER STATE
+   REUSABLE CUSTOM VERTICAL SCROLLBARS
+   Uses the exact same track/thumb classes as the source input.
+   Native Windows/Chromium scrollbars are hidden, so there are
+   no arrow buttons anywhere these custom scrollbars are used.
    ========================================================= */
 
+const customScrollbarTargets = [
+  ".drawer-scroll",
+  ".result-scroll",
+  ".context-text",
+  ".suggestion-card textarea",
+  ".reply-card textarea",
+];
+
+const customScrollbarInstances = new Map();
+
+function scheduleAllCustomScrollbarUpdates() {
+  if (scheduleAllCustomScrollbarUpdates.pending) {
+    return;
+  }
+
+  scheduleAllCustomScrollbarUpdates.pending = true;
+
+  requestAnimationFrame(() => {
+    scheduleAllCustomScrollbarUpdates.pending = false;
+
+    for (const instance of customScrollbarInstances.values()) {
+      instance.update();
+    }
+  });
+}
+
+scheduleAllCustomScrollbarUpdates.pending = false;
+
+function isCustomScrollbarTargetVisible(element) {
+  const rect = element.getBoundingClientRect();
+  const style = window.getComputedStyle(element);
+
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.right > 0 &&
+    rect.left < window.innerWidth &&
+    rect.bottom > 0 &&
+    rect.top < window.innerHeight
+  );
+}
+
+function attachCustomVerticalScrollbar(scrollElement) {
+  if (!scrollElement || customScrollbarInstances.has(scrollElement)) {
+    return;
+  }
+
+  scrollElement.classList.add("clarity-custom-scroll-target");
+
+  const scrollbar = document.createElement("div");
+  scrollbar.className = "source-scrollbar clarity-global-scrollbar";
+  scrollbar.setAttribute("aria-hidden", "true");
+
+  const thumb = document.createElement("div");
+  thumb.className = "source-scroll-thumb";
+
+  scrollbar.appendChild(thumb);
+  document.body.appendChild(scrollbar);
+
+  let dragging = false;
+  let pointerId = null;
+  let dragStartY = 0;
+  let dragStartScrollTop = 0;
+
+  const update = () => {
+    if (!document.body.contains(scrollElement)) {
+      scrollbar.remove();
+      customScrollbarInstances.delete(scrollElement);
+      return;
+    }
+
+    const clientHeight = scrollElement.clientHeight;
+    const scrollHeight = scrollElement.scrollHeight;
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+
+    if (!isCustomScrollbarTargetVisible(scrollElement) || maxScrollTop <= 1) {
+      scrollbar.classList.remove("visible");
+      return;
+    }
+
+    const rect = scrollElement.getBoundingClientRect();
+
+    const inset = 4;
+    const scrollbarWidth = 8;
+
+    scrollbar.style.top = `${Math.round(rect.top + inset)}px`;
+
+    scrollbar.style.left = `${Math.round(rect.right - inset - scrollbarWidth)}px`;
+
+    scrollbar.style.height = `${Math.max(
+      0,
+      Math.round(rect.height - inset * 2),
+    )}px`;
+
+    scrollbar.classList.add("visible");
+
+    const trackHeight = scrollbar.clientHeight;
+    const minimumThumbHeight = 34;
+
+    const calculatedThumbHeight = trackHeight * (clientHeight / scrollHeight);
+
+    const thumbHeight = Math.min(
+      trackHeight,
+      Math.max(minimumThumbHeight, calculatedThumbHeight),
+    );
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const thumbTop =
+      maxScrollTop > 0
+        ? (scrollElement.scrollTop / maxScrollTop) * maxThumbTop
+        : 0;
+
+    thumb.style.height = `${thumbHeight}px`;
+
+    thumb.style.transform = `translateX(-50%) translateY(${thumbTop}px)`;
+  };
+
+  const stopDragging = (event) => {
+    if (!dragging) {
+      return;
+    }
+
+    dragging = false;
+    thumb.classList.remove("dragging");
+
+    if (pointerId !== null && thumb.hasPointerCapture?.(pointerId)) {
+      try {
+        thumb.releasePointerCapture(pointerId);
+      } catch {}
+    }
+
+    pointerId = null;
+    event?.preventDefault?.();
+  };
+
+  scrollElement.addEventListener("scroll", update, { passive: true });
+
+  scrollElement.addEventListener("input", scheduleAllCustomScrollbarUpdates);
+
+  thumb.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    dragging = true;
+    pointerId = event.pointerId;
+    dragStartY = event.clientY;
+    dragStartScrollTop = scrollElement.scrollTop;
+
+    thumb.classList.add("dragging");
+
+    try {
+      thumb.setPointerCapture(event.pointerId);
+    } catch {}
+  });
+
+  thumb.addEventListener("pointermove", (event) => {
+    if (!dragging || event.pointerId !== pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const trackHeight = scrollbar.clientHeight;
+
+    const thumbHeight = thumb.offsetHeight;
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const maxScrollTop = Math.max(
+      0,
+      scrollElement.scrollHeight - scrollElement.clientHeight,
+    );
+
+    if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+      return;
+    }
+
+    const deltaY = event.clientY - dragStartY;
+
+    scrollElement.scrollTop =
+      dragStartScrollTop + deltaY * (maxScrollTop / maxThumbTop);
+  });
+
+  thumb.addEventListener("pointerup", stopDragging);
+
+  thumb.addEventListener("pointercancel", stopDragging);
+
+  scrollbar.addEventListener("pointerdown", (event) => {
+    if (event.target === thumb || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const rect = scrollbar.getBoundingClientRect();
+
+    const thumbHeight = thumb.offsetHeight;
+
+    const trackHeight = scrollbar.clientHeight;
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const maxScrollTop = Math.max(
+      0,
+      scrollElement.scrollHeight - scrollElement.clientHeight,
+    );
+
+    if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+      return;
+    }
+
+    const desiredThumbTop = Math.max(
+      0,
+      Math.min(maxThumbTop, event.clientY - rect.top - thumbHeight / 2),
+    );
+
+    scrollElement.scrollTop = (desiredThumbTop / maxThumbTop) * maxScrollTop;
+
+    update();
+  });
+
+  const resizeObserver = new ResizeObserver(update);
+
+  resizeObserver.observe(scrollElement);
+
+  customScrollbarInstances.set(scrollElement, {
+    scrollbar,
+    thumb,
+    update,
+    resizeObserver,
+  });
+
+  update();
+}
+
+function initializeCustomVerticalScrollbars() {
+  document
+    .querySelectorAll(customScrollbarTargets.join(","))
+    .forEach((element) => {
+      attachCustomVerticalScrollbar(element);
+    });
+
+  scheduleAllCustomScrollbarUpdates();
+}
+
+window.addEventListener("resize", scheduleAllCustomScrollbarUpdates);
+
+document.addEventListener("transitionend", scheduleAllCustomScrollbarUpdates);
+
+const customScrollbarMutationObserver = new MutationObserver(() => {
+  initializeCustomVerticalScrollbars();
+});
+
+customScrollbarMutationObserver.observe(document.body, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: ["class"],
+});
+
+initializeCustomVerticalScrollbars();
+
+/* Initial renderer state */
 (async () => {
   currentSettings =
     (await window.writingAssistant.getSettings()) ||
     structuredClone(DEFAULT_SETTINGS);
 
   updateSettingsUi();
-
+  await loadAppInfo();
   updateCharCount();
-
   updateConversationCount();
-
-  /*
-    Initial custom scrollbar calculation.
-  */
   scheduleSourceScrollbarUpdate();
 })();
