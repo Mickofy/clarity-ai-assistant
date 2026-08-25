@@ -1,7 +1,7 @@
 {
   "name": "clarity-ai-assistant",
   "productName": "Clarity AI Assistant",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A private desktop writing assistant for clear, professional communication.",
   "author": "Micko",
   "main": "src/main.js",
@@ -14,7 +14,8 @@
     "dist": "electron-builder --win --x64"
   },
   "dependencies": {
-    "dotenv": "^17.2.0"
+    "dotenv": "^17.2.0",
+    "electron-updater": "^6.6.9"
   },
   "devDependencies": {
     "electron": "^44.0.0",
@@ -34,6 +35,12 @@
       "package.json"
     ],
     "artifactName": "${productName} Setup ${version}.${ext}",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://clarity-updates-gateway.ryowajeqwerty.workers.dev"
+      }
+    ],
     "win": {
       "icon": "build/icon.ico",
       "target": [
