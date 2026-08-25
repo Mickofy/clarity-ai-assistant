@@ -1,0 +1,1715 @@
+:root {
+  --bg: #101010;
+
+  --surface: #111111;
+  --surface-2: #151515;
+  --surface-3: #191919;
+
+  --hover: #181818;
+  --hover-strong: #1b1b1b;
+
+  --border: #2a2a2a;
+  --border-soft: #242424;
+  --border-strong: #383838;
+
+  --text: #f1f1ef;
+  --text-2: #b8b8b3;
+
+  --muted: #90908b;
+  --soft: #666662;
+
+  /*
+    Monochrome focus indicator.
+    Replaces the yellow / orange native ring.
+  */
+  --focus: #a8a8a3;
+  --focus-soft: #777772;
+
+  --mono:
+    "Cascadia Code", "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, Monaco,
+    monospace;
+}
+
+/* =========================================================
+   RESET
+   ========================================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+
+  margin: 0;
+
+  overflow: hidden;
+
+  background: var(--bg);
+}
+
+body {
+  color: var(--text);
+
+  font-family: var(--mono);
+  font-size: 12px;
+
+  text-rendering: geometricPrecision;
+}
+
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+select {
+  cursor: pointer;
+}
+
+button {
+  color: inherit;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* =========================================================
+   REMOVE NATIVE FOCUS COLOR
+   ========================================================= */
+
+button,
+textarea,
+select {
+  outline: none;
+}
+
+/*
+  Explicitly override Chromium / Windows native
+  yellow-orange focus outlines.
+*/
+button:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
+/*
+  Accessible monochrome keyboard focus.
+*/
+button:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/*
+  Mouse clicks should not leave a focus ring.
+*/
+button:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* =========================================================
+   APP SHELL
+   ========================================================= */
+
+.app-shell {
+  width: 100%;
+  height: 100%;
+
+  padding: 0;
+
+  background: var(--bg);
+}
+
+.workspace {
+  position: relative;
+
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  flex-direction: column;
+
+  overflow: hidden;
+
+  border: 0;
+  border-radius: 7px;
+
+  background: var(--surface);
+
+  /*
+    Very subtle app edge.
+  */
+  box-shadow: inset 0 0 0 1px #1b1b1b;
+}
+
+/* =========================================================
+   HEADER
+   ========================================================= */
+
+.titlebar {
+  -webkit-app-region: drag;
+
+  height: 68px;
+  flex: 0 0 68px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0 20px 0 28px;
+
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+
+  background: #0b0b0b;
+
+  cursor: move;
+
+  user-select: none;
+}
+
+.title-copy {
+  min-width: 0;
+}
+
+.app-name {
+  color: var(--text);
+
+  font-size: 15px;
+  font-weight: 600;
+
+  line-height: 1;
+
+  letter-spacing: 0.12em;
+}
+
+/* =========================================================
+   WINDOW CONTROLS
+   ========================================================= */
+
+.window-actions {
+  -webkit-app-region: no-drag;
+
+  display: flex;
+  align-items: center;
+
+  gap: 4px;
+}
+
+.window-button {
+  width: 40px;
+  height: 40px;
+
+  padding: 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 0;
+  border-radius: 7px;
+
+  background: transparent;
+
+  color: var(--muted);
+
+  font-size: 20px;
+  line-height: 1;
+
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.window-button:hover,
+.window-button[aria-expanded="true"] {
+  background: var(--hover);
+
+  color: var(--text);
+}
+
+/*
+  Monochrome focus state for settings,
+  minimize and close controls.
+*/
+.window-button:focus-visible {
+  outline: none;
+
+  background: var(--hover);
+
+  color: var(--text);
+
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.settings-icon {
+  width: 20px;
+  height: 20px;
+
+  flex: 0 0 auto;
+}
+
+/* =========================================================
+   NOTICE
+   ========================================================= */
+
+.notice {
+  flex: 0 0 auto;
+
+  margin: 14px 20px 0;
+
+  padding: 11px 13px;
+
+  display: grid;
+
+  grid-template-columns:
+    24px
+    1fr;
+
+  align-items: start;
+
+  gap: 10px;
+
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  background: var(--surface-2);
+
+  color: var(--text-2);
+}
+
+.notice-icon {
+  width: 20px;
+  height: 20px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+
+  color: var(--text-2);
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.notice-copy {
+  min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  gap: 4px;
+}
+
+.notice-copy strong {
+  color: var(--text);
+
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.notice-copy span {
+  color: var(--muted);
+
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+/* =========================================================
+   VIEW SYSTEM
+   ========================================================= */
+
+.view {
+  min-height: 0;
+
+  flex: 1;
+}
+
+.main-view {
+  display: flex;
+  flex-direction: column;
+
+  gap: 16px;
+
+  padding: 16px 20px 18px;
+
+  overflow: hidden;
+}
+
+/* =========================================================
+   INPUT PANEL
+   ========================================================= */
+
+.input-panel {
+  position: relative;
+
+  flex: 0 0 auto;
+
+  padding: 20px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface-2);
+}
+
+/* =========================================================
+   INPUT TOOLBAR
+   ========================================================= */
+
+.input-toolbar {
+  display: grid;
+
+  grid-template-columns:
+    auto
+    auto
+    auto
+    1fr;
+
+  align-items: center;
+
+  column-gap: 14px;
+  row-gap: 12px;
+}
+
+.input-label,
+.sidebar-kicker,
+.section-kicker,
+.card-label,
+.drawer-kicker {
+  color: var(--text-2);
+
+  font-size: 10px;
+  font-weight: 700;
+
+  letter-spacing: 0.08em;
+}
+
+/* =========================================================
+   SOURCE TABS
+   ========================================================= */
+
+.source-tabs {
+  display: inline-flex;
+
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  background: var(--surface);
+}
+
+.source-tab {
+  min-width: 88px;
+  height: 32px;
+
+  padding: 0 14px;
+
+  border: 0;
+
+  background: transparent;
+
+  color: var(--muted);
+
+  font-size: 10px;
+
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.source-tab + .source-tab {
+  border-left: 1px solid var(--border);
+}
+
+.source-tab:hover {
+  background: var(--hover);
+
+  color: var(--text-2);
+}
+
+.source-tab.active {
+  background: #dededb;
+
+  color: #111111;
+}
+
+/*
+  Monochrome keyboard focus.
+*/
+.source-tab:focus-visible {
+  outline: none;
+
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+/* =========================================================
+   REFRESH BUTTON
+   ========================================================= */
+
+.refresh-button {
+  height: 32px;
+
+  padding: 0 11px;
+
+  display: inline-flex;
+  align-items: center;
+
+  gap: 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  background: transparent;
+
+  color: var(--text-2);
+
+  font-size: 10px;
+
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.refresh-button:hover {
+  border-color: var(--border-strong);
+
+  background: var(--hover);
+
+  color: var(--text);
+}
+
+.refresh-button:focus-visible {
+  outline: none;
+
+  border-color: var(--focus-soft);
+
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.refresh-button:disabled {
+  opacity: 0.5;
+
+  cursor: wait;
+}
+
+.refresh-icon {
+  width: 17px;
+  height: 17px;
+
+  flex: 0 0 auto;
+}
+
+/* =========================================================
+   INPUT STATUS
+   ========================================================= */
+
+.input-status {
+  justify-self: end;
+
+  display: flex;
+  align-items: center;
+
+  gap: 7px;
+
+  color: var(--muted);
+
+  font-size: 9px;
+
+  letter-spacing: 0.05em;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+
+  border-radius: 50%;
+
+  background: var(--soft);
+}
+
+.input-status.ready {
+  color: var(--text-2);
+}
+
+.input-status.ready .status-dot {
+  background: #c9c9c5;
+}
+
+/* =========================================================
+   SOURCE TEXTAREA WRAPPER
+   ========================================================= */
+
+.source-textarea-wrap {
+  position: relative;
+
+  width: 100%;
+  height: 120px;
+
+  margin-top: 18px;
+}
+
+/* =========================================================
+   SOURCE TEXTAREA
+   ========================================================= */
+
+#sourceText {
+  display: block;
+
+  width: 100%;
+  height: 100%;
+
+  margin: 0;
+
+  padding: 17px 34px 32px 16px;
+
+  resize: none;
+
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  background: var(--surface-3);
+
+  color: var(--text);
+
+  font-family: var(--mono);
+
+  font-size: 11px;
+  line-height: 1.55;
+
+  /*
+    Native scrollbar is hidden.
+    Custom scrollbar below is used.
+  */
+  scrollbar-width: none;
+
+  -ms-overflow-style: none;
+
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+#sourceText::-webkit-scrollbar {
+  display: none;
+
+  width: 0;
+  height: 0;
+}
+
+#sourceText:hover {
+  border-color: #303030;
+}
+
+#sourceText:focus {
+  outline: none;
+
+  border-color: var(--border-strong);
+}
+
+/*
+  Monochrome textarea focus.
+*/
+#sourceText:focus-visible {
+  outline: none;
+
+  border-color: var(--focus-soft);
+
+  box-shadow: 0 0 0 1px var(--focus-soft);
+}
+
+#sourceText::placeholder {
+  color: #74746f;
+}
+
+/* =========================================================
+   CUSTOM SOURCE SCROLLBAR
+   ========================================================= */
+
+.source-scrollbar {
+  position: absolute;
+
+  top: 10px;
+  right: 8px;
+  bottom: 10px;
+
+  width: 8px;
+
+  opacity: 0;
+
+  pointer-events: none;
+
+  transition: opacity 120ms ease;
+}
+
+.source-scrollbar.visible {
+  opacity: 1;
+
+  pointer-events: auto;
+}
+
+/*
+  Dark vertical track.
+*/
+.source-scrollbar::before {
+  content: "";
+
+  position: absolute;
+
+  top: 0;
+  bottom: 0;
+
+  left: 50%;
+
+  width: 4px;
+
+  transform: translateX(-50%);
+
+  border-radius: 999px;
+
+  background: #252525;
+}
+
+/*
+  Light monochrome draggable thumb.
+*/
+.source-scroll-thumb {
+  position: absolute;
+
+  top: 0;
+  left: 50%;
+
+  width: 6px;
+  min-height: 34px;
+
+  transform: translateX(-50%) translateY(0);
+
+  border-radius: 999px;
+
+  background: #8b8b87;
+
+  cursor: grab;
+
+  z-index: 1;
+
+  transition: background 100ms ease;
+}
+
+.source-scroll-thumb:hover {
+  background: #a1a19c;
+}
+
+.source-scroll-thumb.dragging {
+  background: #b5b5b0;
+
+  cursor: grabbing;
+}
+
+/* =========================================================
+   CHARACTER COUNTER
+   ========================================================= */
+
+.char-count {
+  position: absolute;
+
+  right: 17px;
+  bottom: 10px;
+
+  margin: 0;
+  padding: 0;
+
+  color: var(--soft);
+
+  font-size: 9px;
+
+  pointer-events: none;
+}
+
+/* =========================================================
+   ACTION LIST
+   ========================================================= */
+
+.action-list {
+  flex: 1;
+
+  min-height: 0;
+
+  margin: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface);
+}
+
+/* =========================================================
+   ACTION ROW
+   ========================================================= */
+
+.action-row {
+  position: relative;
+
+  width: 100%;
+
+  flex: 1;
+  min-height: 76px;
+
+  /*
+    IMPORTANT:
+    No left padding so the number column begins
+    directly at the edge of the action panel.
+  */
+  padding: 0 20px 0 0;
+
+  display: grid;
+
+  grid-template-columns:
+    84px
+    minmax(0, 1fr)
+    auto;
+
+  align-items: center;
+
+  column-gap: 20px;
+
+  border: 0;
+  border-bottom: 1px solid #272727;
+
+  background: var(--surface);
+
+  text-align: left;
+
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.action-row:last-child {
+  border-bottom: 0;
+}
+
+.action-row:hover {
+  background: #161616;
+}
+
+.action-row:focus-visible {
+  outline: none;
+
+  background: #171717;
+
+  box-shadow: inset 0 0 0 1px var(--focus-soft);
+}
+
+/* =========================================================
+   ACTION NUMBER
+   True horizontal + vertical centering
+   ========================================================= */
+
+.action-number {
+  position: relative;
+
+  /*
+    Occupies the complete area from the
+    left edge to the vertical divider.
+  */
+  width: 84px;
+  height: 100%;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+  margin: 0;
+
+  border: 0;
+
+  background: transparent;
+
+  color: #d2d2cd;
+
+  font-size: 22px;
+  font-weight: 400;
+
+  line-height: 1;
+
+  letter-spacing: -0.03em;
+
+  text-align: center;
+
+  transition: color 120ms ease;
+}
+
+/* short vertical divider */
+.action-number::after {
+  content: "";
+
+  position: absolute;
+
+  top: 50%;
+  right: 0;
+
+  width: 1px;
+  height: 44px;
+
+  transform: translateY(-50%);
+
+  background: #343434;
+}
+
+.action-row:hover .action-number,
+.action-row:focus-visible .action-number {
+  color: var(--text);
+}
+
+/* =========================================================
+   ACTION CONTENT
+   ========================================================= */
+
+.action-body {
+  min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+
+  gap: 7px;
+
+  padding: 0;
+}
+
+.action-body strong {
+  color: var(--text);
+
+  font-size: 12.5px;
+  font-weight: 600;
+
+  line-height: 1.2;
+}
+
+.action-body small {
+  color: #898984;
+
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+/* =========================================================
+   ACTION HOTKEY
+   ========================================================= */
+
+.hotkey {
+  min-width: 76px;
+
+  margin: 0;
+
+  padding: 7px 10px;
+
+  border: 1px solid #2f2f2f;
+  border-radius: 6px;
+
+  background: #121212;
+
+  color: #c1c1bc;
+
+  font-size: 9px;
+  font-weight: 500;
+
+  line-height: 1;
+
+  text-align: center;
+
+  letter-spacing: 0.03em;
+
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.action-row:hover .hotkey {
+  border-color: #3a3a3a;
+
+  background: #151515;
+}
+
+.action-row:focus-visible .hotkey {
+  border-color: var(--focus-soft);
+
+  color: var(--text);
+}
+
+/* =========================================================
+   MAIN FOOTER
+   ========================================================= */
+
+.main-footer {
+  flex: 0 0 auto;
+
+  min-height: 24px;
+
+  margin: 0;
+
+  padding: 0 4px 1px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 14px;
+
+  color: var(--muted);
+
+  font-size: 8.5px;
+
+  letter-spacing: 0.05em;
+}
+
+.divider {
+  width: 1px;
+  height: 15px;
+
+  background: var(--border-strong);
+}
+
+/* =========================================================
+   LOADING VIEW
+   ========================================================= */
+
+.centered-view {
+  display: flex;
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  padding: 20px;
+}
+
+.terminal-line {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  color: var(--text-2);
+
+  font-size: 12px;
+}
+
+.cursor {
+  width: 7px;
+  height: 14px;
+
+  background: var(--text-2);
+
+  animation: blink 0.9s steps(1) infinite;
+}
+
+.loading-note {
+  margin-top: 9px;
+
+  color: var(--soft);
+
+  font-size: 9px;
+}
+
+@keyframes blink {
+  0%,
+  48% {
+    opacity: 1;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* =========================================================
+   RESULT VIEWS
+   ========================================================= */
+
+.result-view {
+  display: flex;
+  flex-direction: column;
+
+  overflow: hidden;
+
+  padding: 20px;
+}
+
+.text-button {
+  align-self: flex-start;
+
+  padding: 0;
+
+  border: 0;
+
+  background: transparent;
+
+  color: var(--muted);
+
+  font-size: 9px;
+}
+
+.text-button:hover {
+  color: var(--text);
+}
+
+.text-button:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 4px;
+}
+
+.result-heading {
+  margin: 18px 0 13px;
+}
+
+.result-heading h2 {
+  margin: 8px 0 0;
+
+  color: var(--text);
+
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.result-heading p {
+  margin: 8px 0 0;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+/* =========================================================
+   RESULT CARDS
+   ========================================================= */
+
+.result-card {
+  margin-bottom: 9px;
+
+  padding: 13px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface-2);
+}
+
+.card-text {
+  margin-top: 9px;
+
+  color: var(--text-2);
+
+  font-size: 10.5px;
+  line-height: 1.55;
+
+  white-space: pre-wrap;
+}
+
+.suggestion-card {
+  flex: 1;
+
+  min-height: 0;
+}
+
+.suggestion-card textarea,
+.reply-card textarea {
+  display: block;
+
+  width: 100%;
+
+  height: calc(100% - 24px);
+
+  margin-top: 9px;
+
+  resize: none;
+
+  border: 0;
+
+  background: transparent;
+
+  color: var(--text);
+
+  font-family: var(--mono);
+
+  font-size: 11px;
+  line-height: 1.55;
+
+  scrollbar-width: thin;
+
+  scrollbar-color: #555551 transparent;
+}
+
+.suggestion-card textarea:focus-visible,
+.reply-card textarea:focus-visible {
+  outline: 1px solid var(--focus-soft);
+  outline-offset: 3px;
+}
+
+/* =========================================================
+   RESULT SCROLL AREA
+   ========================================================= */
+
+.result-scroll {
+  min-height: 0;
+
+  flex: 1;
+
+  overflow-y: auto;
+
+  padding-right: 4px;
+
+  scrollbar-width: thin;
+
+  scrollbar-color: #555551 transparent;
+}
+
+/* =========================================================
+   SECONDARY SCROLLBARS
+   ========================================================= */
+
+.result-scroll::-webkit-scrollbar,
+.drawer-scroll::-webkit-scrollbar,
+.context-text::-webkit-scrollbar,
+.suggestion-card textarea::-webkit-scrollbar,
+.reply-card textarea::-webkit-scrollbar {
+  width: 7px;
+}
+
+.result-scroll::-webkit-scrollbar-track,
+.drawer-scroll::-webkit-scrollbar-track,
+.context-text::-webkit-scrollbar-track,
+.suggestion-card textarea::-webkit-scrollbar-track,
+.reply-card textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.result-scroll::-webkit-scrollbar-thumb,
+.drawer-scroll::-webkit-scrollbar-thumb,
+.context-text::-webkit-scrollbar-thumb,
+.suggestion-card textarea::-webkit-scrollbar-thumb,
+.reply-card textarea::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+
+  border-radius: 999px;
+
+  background: #555551;
+
+  background-clip: content-box;
+}
+
+.result-scroll::-webkit-scrollbar-thumb:hover,
+.drawer-scroll::-webkit-scrollbar-thumb:hover,
+.context-text::-webkit-scrollbar-thumb:hover,
+.suggestion-card textarea::-webkit-scrollbar-thumb:hover,
+.reply-card textarea::-webkit-scrollbar-thumb:hover {
+  background: #70706b;
+
+  background-clip: content-box;
+}
+
+.result-scroll::-webkit-scrollbar-button,
+.drawer-scroll::-webkit-scrollbar-button,
+.context-text::-webkit-scrollbar-button,
+.suggestion-card textarea::-webkit-scrollbar-button,
+.reply-card textarea::-webkit-scrollbar-button {
+  display: none !important;
+
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* =========================================================
+   TERMS
+   ========================================================= */
+
+.terms-list {
+  margin-top: 9px;
+}
+
+.term-row {
+  padding: 8px 0;
+
+  border-top: 1px solid var(--border);
+}
+
+.term-row:first-child {
+  padding-top: 0;
+
+  border-top: 0;
+}
+
+.term-row strong {
+  display: block;
+
+  margin-bottom: 4px;
+
+  color: var(--text);
+
+  font-size: 10px;
+}
+
+.term-row span {
+  color: var(--muted);
+
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+/* =========================================================
+   RESULT ACTIONS
+   ========================================================= */
+
+.result-actions {
+  margin-top: auto;
+
+  padding-top: 12px;
+
+  display: flex;
+  justify-content: flex-end;
+
+  gap: 8px;
+}
+
+.primary-action,
+.secondary-action {
+  min-height: 36px;
+
+  padding: 0 14px;
+
+  border-radius: 6px;
+
+  font-size: 9px;
+  font-weight: 700;
+
+  letter-spacing: 0.04em;
+}
+
+.primary-action {
+  border: 1px solid #e6e6e2;
+
+  background: #e6e6e2;
+
+  color: #111111;
+}
+
+.secondary-action {
+  border: 1px solid var(--border-strong);
+
+  background: transparent;
+
+  color: var(--text-2);
+}
+
+.primary-action:hover {
+  background: #ffffff;
+}
+
+.secondary-action:hover {
+  background: var(--hover);
+}
+
+.primary-action:disabled {
+  opacity: 0.35;
+
+  cursor: not-allowed;
+}
+
+/*
+  Monochrome button focus.
+*/
+.primary-action:focus-visible,
+.secondary-action:focus-visible {
+  outline: none;
+
+  box-shadow:
+    0 0 0 1px var(--bg),
+    0 0 0 2px var(--focus);
+}
+
+/* =========================================================
+   CLIENT REPLY
+   ========================================================= */
+
+.client-heading {
+  margin-bottom: 10px;
+}
+
+.conversation-strip {
+  margin-bottom: 9px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  color: var(--soft);
+
+  font-size: 9px;
+}
+
+.compact-card {
+  flex: 0 0 auto;
+}
+
+.context-text {
+  max-height: 80px;
+
+  overflow-y: auto;
+
+  scrollbar-width: thin;
+
+  scrollbar-color: #555551 transparent;
+}
+
+.reply-card {
+  min-height: 150px;
+
+  flex: 1;
+}
+
+/* =========================================================
+   DRAWER BACKDROP
+   ========================================================= */
+
+.drawer-backdrop {
+  position: absolute;
+
+  inset: 0;
+
+  z-index: 20;
+
+  opacity: 0;
+
+  pointer-events: none;
+
+  background: rgba(0, 0, 0, 0.38);
+
+  transition: opacity 140ms ease;
+}
+
+.drawer-backdrop.open {
+  opacity: 1;
+
+  pointer-events: auto;
+}
+
+/* =========================================================
+   SETTINGS DRAWER
+   ========================================================= */
+
+.utility-drawer {
+  position: absolute;
+
+  top: 0;
+  right: 0;
+  bottom: 0;
+
+  z-index: 21;
+
+  width: 330px;
+
+  display: flex;
+  flex-direction: column;
+
+  border-left: 1px solid var(--border-strong);
+
+  background: #121212;
+
+  transform: translateX(100%);
+
+  pointer-events: none;
+
+  transition: transform 160ms ease;
+}
+
+.utility-drawer.open {
+  transform: translateX(0);
+
+  pointer-events: auto;
+}
+
+/* =========================================================
+   DRAWER HEADER
+   ========================================================= */
+
+.drawer-header {
+  flex: 0 0 auto;
+
+  min-height: 86px;
+
+  padding: 20px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-title {
+  margin-top: 6px;
+
+  color: var(--text);
+
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.drawer-close {
+  width: 34px;
+  height: 34px;
+
+  border: 0;
+  border-radius: 6px;
+
+  background: transparent;
+
+  color: var(--muted);
+
+  font-size: 18px;
+}
+
+.drawer-close:hover {
+  background: var(--hover);
+
+  color: var(--text);
+}
+
+.drawer-close:focus-visible {
+  outline: none;
+
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.drawer-scroll {
+  min-height: 0;
+
+  flex: 1;
+
+  overflow-y: auto;
+
+  padding: 0 20px 20px;
+
+  scrollbar-width: thin;
+
+  scrollbar-color: #555551 transparent;
+}
+
+/* =========================================================
+   DRAWER SECTIONS
+   ========================================================= */
+
+.drawer-section {
+  padding: 20px 0;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-section:last-of-type {
+  border-bottom: 0;
+}
+
+.sidebar-kicker {
+  margin-bottom: 15px;
+}
+
+/* =========================================================
+   SHORTCUT SETTINGS
+   ========================================================= */
+
+.shortcut-row,
+.key-row,
+.setting-row {
+  display: grid;
+
+  grid-template-columns:
+    1fr
+    auto;
+
+  align-items: center;
+
+  gap: 12px;
+}
+
+.shortcut-row {
+  margin-bottom: 10px;
+}
+
+.shortcut-row:last-child {
+  margin-bottom: 0;
+}
+
+.shortcut-row > span {
+  color: var(--text-2);
+
+  font-size: 10px;
+}
+
+.shortcut-capture {
+  min-width: 106px;
+  min-height: 31px;
+
+  padding: 0 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  background: var(--surface-2);
+
+  color: var(--text-2);
+
+  font-size: 9px;
+}
+
+.shortcut-capture:hover {
+  border-color: var(--border-strong);
+
+  background: var(--hover);
+}
+
+/*
+  Replaces any yellow focus highlight.
+*/
+.shortcut-capture:focus-visible {
+  outline: none;
+
+  border-color: var(--focus-soft);
+
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.shortcut-capture.capturing {
+  background: #e6e6e2;
+
+  color: #111111;
+}
+
+/* =========================================================
+   IN-APP HOTKEYS
+   ========================================================= */
+
+.key-row {
+  margin: 10px 0;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.key-row span:first-child {
+  color: var(--text-2);
+}
+
+.key-row.separated {
+  margin-top: 16px;
+
+  padding-top: 13px;
+
+  border-top: 1px solid var(--border);
+}
+
+/* =========================================================
+   SETTINGS
+   ========================================================= */
+
+.setting-row {
+  margin: 12px 0;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.setting-row select {
+  width: 128px;
+  height: 32px;
+
+  padding: 0 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  background: var(--surface-2);
+
+  color: var(--text-2);
+
+  font-size: 9px;
+}
+
+.setting-row select:focus-visible {
+  outline: none;
+
+  border-color: var(--focus);
+
+  box-shadow: 0 0 0 1px var(--focus-soft);
+}
+
+.setting-note {
+  margin-top: 15px;
+
+  color: var(--soft);
+
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.drawer-notice {
+  padding: 10px;
+
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+
+  background: var(--surface-3);
+
+  color: var(--text-2);
+
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+/* =========================================================
+   REDUCED MOTION
+   ========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+
+  .drawer-backdrop,
+  .utility-drawer,
+  .action-row,
+  .action-number,
+  .hotkey,
+  .source-scrollbar,
+  .source-scroll-thumb,
+  .window-button,
+  .refresh-button,
+  .source-tab {
+    transition: none;
+  }
+}

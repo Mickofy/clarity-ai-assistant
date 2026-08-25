@@ -1,0 +1,16 @@
+{
+  "name": "mickofy-writing-assistant",
+  "version": "0.1.0",
+  "description": "A private desktop writing assistant for clear, professional communication.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^39.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.0"
+  }
+}

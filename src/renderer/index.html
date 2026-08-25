@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'none'; img-src 'self' data:;"
+    />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Clarity AI Assistant</title>
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <!-- ===================================================
+           HEADER
+           =================================================== -->
+
+        <header class="titlebar">
+          <div class="title-copy">
+            <div class="app-name">CLARITY AI ASSISTANT</div>
+          </div>
+
+          <div class="window-actions">
+            <!-- Settings -->
+            <button
+              id="drawerToggleBtn"
+              class="window-button"
+              type="button"
+              title="Shortcuts & Settings"
+              aria-label="Open shortcuts and settings"
+              aria-expanded="false"
+            >
+              <!-- Lucide Settings -->
+              <svg
+                class="settings-icon"
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                />
+
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+
+            <!-- Minimize -->
+            <button
+              id="minimizeBtn"
+              class="window-button"
+              type="button"
+              title="Minimize"
+              aria-label="Minimize"
+            >
+              −
+            </button>
+
+            <!-- Close -->
+            <button
+              id="closeBtn"
+              class="window-button"
+              type="button"
+              title="Close"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+
+        <!-- ===================================================
+           NOTICE
+           =================================================== -->
+
+        <div id="notice" class="notice hidden" role="status" aria-live="polite">
+          <span class="notice-icon" aria-hidden="true"> i </span>
+
+          <div class="notice-copy">
+            <strong id="noticeTitle"> No text selected </strong>
+
+            <span id="noticeMessage">
+              Highlight text in the source app and press Ctrl+R, or enter text
+              manually.
+            </span>
+          </div>
+        </div>
+
+        <!-- ===================================================
+           MAIN VIEW
+           =================================================== -->
+
+        <div id="mainView" class="main-view view">
+          <!-- INPUT -->
+          <section class="input-panel">
+            <div class="input-toolbar">
+              <div class="input-label">INPUT</div>
+
+              <!-- Source -->
+              <div class="source-tabs" role="group" aria-label="Input source">
+                <button
+                  id="selectedSourceBtn"
+                  class="source-tab active"
+                  type="button"
+                  data-source="selected"
+                >
+                  SELECTED
+                </button>
+
+                <button
+                  id="clipboardSourceBtn"
+                  class="source-tab"
+                  type="button"
+                  data-source="clipboard"
+                >
+                  CLIPBOARD
+                </button>
+              </div>
+
+              <!-- Refresh -->
+              <button
+                id="refreshBtn"
+                class="refresh-button"
+                type="button"
+                title="Refresh input (Ctrl+R)"
+                aria-label="Refresh current input source"
+              >
+                <!-- Lucide RotateCw -->
+                <svg
+                  class="refresh-icon"
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+
+                  <path d="M21 3v5h-5" />
+                </svg>
+
+                <span> Ctrl + R </span>
+              </button>
+
+              <!-- Status -->
+              <div id="inputStatus" class="input-status">
+                <span class="status-dot"></span>
+
+                <span id="inputStatusText"> NO SELECTION </span>
+              </div>
+            </div>
+
+            <div class="source-textarea-wrap">
+              <textarea
+                id="sourceText"
+                spellcheck="true"
+                maxlength="12000"
+                placeholder="Highlight text in another app, then open the assistant.&#10;You can also type or paste text here directly."
+              ></textarea>
+
+              <div
+                id="sourceScrollbar"
+                class="source-scrollbar"
+                aria-hidden="true"
+              >
+                <div id="sourceScrollThumb" class="source-scroll-thumb"></div>
+              </div>
+
+              <div id="charCount" class="char-count">0 / 12,000</div>
+            </div>
+          </section>
+
+          <!-- =================================================
+             ACTIONS
+             ================================================= -->
+
+          <section
+            id="actionList"
+            class="action-list"
+            aria-label="Assistant actions"
+          >
+            <button class="action-row" type="button" data-action="express">
+              <span class="action-number"> 01 </span>
+
+              <span class="action-body">
+                <strong> Express Clearly </strong>
+
+                <small> Organize rough thoughts into clear English </small>
+              </span>
+
+              <span class="hotkey"> Alt + 1 </span>
+            </button>
+
+            <button class="action-row" type="button" data-action="understand">
+              <span class="action-number"> 02 </span>
+
+              <span class="action-body">
+                <strong> Understand This </strong>
+
+                <small>
+                  Explain difficult text, terms, or paragraphs simply
+                </small>
+              </span>
+
+              <span class="hotkey"> Alt + 2 </span>
+            </button>
+
+            <button class="action-row" type="button" data-action="client_reply">
+              <span class="action-number"> 03 </span>
+
+              <span class="action-body">
+                <strong> Client Reply </strong>
+
+                <small>
+                  Turn your rough response into a professional reply
+                </small>
+              </span>
+
+              <span class="hotkey"> Alt + 3 </span>
+            </button>
+
+            <button class="action-row" type="button" data-action="grammar">
+              <span class="action-number"> 04 </span>
+
+              <span class="action-body">
+                <strong> Grammar Only </strong>
+
+                <small> Correct English with minimal rewriting </small>
+              </span>
+
+              <span class="hotkey"> Alt + 4 </span>
+            </button>
+          </section>
+
+          <!-- =================================================
+             FOOTER
+             ================================================= -->
+
+          <div class="main-footer">
+            <span> ALT + 1 – 4 TO CHOOSE </span>
+
+            <span class="divider"></span>
+
+            <span> CTRL + R REFRESH </span>
+
+            <span class="divider"></span>
+
+            <span> ESC TO CLOSE </span>
+          </div>
+        </div>
+
+        <!-- ===================================================
+           LOADING
+           =================================================== -->
+
+        <div id="loadingView" class="view centered-view hidden">
+          <div class="terminal-line">
+            <span> &gt; </span>
+
+            <span id="loadingTitle"> Understanding your message… </span>
+
+            <span class="cursor"></span>
+          </div>
+
+          <div class="loading-note">
+            Processing through your writing service.
+          </div>
+        </div>
+
+        <!-- ===================================================
+           WRITING RESULT
+           =================================================== -->
+
+        <div id="writingResultView" class="view result-view hidden">
+          <button class="text-button" type="button" data-back>← BACK</button>
+
+          <div class="result-heading">
+            <div id="writingResultEyebrow" class="section-kicker">
+              EXPRESS CLEARLY
+            </div>
+
+            <h2 id="writingResultTitle">Suggested message</h2>
+          </div>
+
+          <div id="intentCard" class="result-card hidden">
+            <div class="card-label">WHAT I UNDERSTOOD</div>
+
+            <div id="intentSummary" class="card-text"></div>
+          </div>
+
+          <div id="clarificationCard" class="result-card hidden">
+            <div class="card-label">MORE CONTEXT NEEDED</div>
+
+            <div id="clarificationQuestion" class="card-text"></div>
+          </div>
+
+          <div id="suggestionCard" class="result-card suggestion-card">
+            <div class="card-label">RESULT</div>
+
+            <textarea id="suggestionText" spellcheck="true"></textarea>
+          </div>
+
+          <div class="result-actions">
+            <button
+              id="copySuggestionBtn"
+              class="secondary-action"
+              type="button"
+            >
+              COPY
+            </button>
+
+            <button
+              id="replaceSuggestionBtn"
+              class="primary-action"
+              type="button"
+            >
+              REPLACE SELECTION
+            </button>
+          </div>
+        </div>
+
+        <!-- ===================================================
+           UNDERSTAND RESULT
+           =================================================== -->
+
+        <div id="understandResultView" class="view result-view hidden">
+          <button class="text-button" type="button" data-back>← BACK</button>
+
+          <div class="result-heading">
+            <div class="section-kicker">UNDERSTAND THIS</div>
+
+            <h2>Simple explanation</h2>
+          </div>
+
+          <div class="result-scroll">
+            <div class="result-card">
+              <div class="card-label">SIMPLE MEANING</div>
+
+              <div id="simpleMeaning" class="card-text"></div>
+            </div>
+
+            <div id="whatTheyWantCard" class="result-card">
+              <div class="card-label">WHAT THEY WANT / MEAN</div>
+
+              <div id="whatTheyWant" class="card-text"></div>
+            </div>
+
+            <div id="termsCard" class="result-card hidden">
+              <div class="card-label">USEFUL TERMS</div>
+
+              <div id="termsList" class="terms-list"></div>
+            </div>
+
+            <div id="ambiguityCard" class="result-card hidden">
+              <div class="card-label">MAY BE UNCLEAR</div>
+
+              <div id="ambiguityNote" class="card-text"></div>
+            </div>
+          </div>
+
+          <div class="result-actions">
+            <button class="secondary-action" type="button" data-back>
+              DONE
+            </button>
+
+            <button id="helpReplyBtn" class="primary-action" type="button">
+              HELP ME REPLY
+            </button>
+          </div>
+        </div>
+
+        <!-- ===================================================
+           CLIENT REPLY
+           =================================================== -->
+
+        <div id="clientReplyView" class="view result-view hidden">
+          <button class="text-button" type="button" data-back>← BACK</button>
+
+          <div class="result-heading client-heading">
+            <div class="section-kicker">CLIENT REPLY</div>
+
+            <h2>What do you want to say?</h2>
+
+            <p>Write naturally. English, Taglish, or Tagalog is okay.</p>
+          </div>
+
+          <div class="conversation-strip">
+            <span id="conversationCount"> SESSION CONTEXT: 0 MESSAGES </span>
+
+            <button id="clearConversationBtn" class="text-button" type="button">
+              CLEAR
+            </button>
+          </div>
+
+          <div class="result-card compact-card">
+            <div class="card-label">CLIENT / CONVERSATION CONTEXT</div>
+
+            <div id="clientContext" class="card-text context-text"></div>
+          </div>
+
+          <div class="result-card reply-card">
+            <div class="card-label">YOUR ROUGH RESPONSE</div>
+
+            <textarea
+              id="roughReply"
+              spellcheck="true"
+              placeholder="Example: The current setup looks okay, but I want to check whether it could be difficult to maintain long term."
+            ></textarea>
+          </div>
+
+          <div class="result-actions">
+            <button class="secondary-action" type="button" data-back>
+              CANCEL
+            </button>
+
+            <button id="createReplyBtn" class="primary-action" type="button">
+              CREATE REPLY
+            </button>
+          </div>
+        </div>
+
+        <!-- ===================================================
+           DRAWER
+           =================================================== -->
+
+        <div
+          id="drawerBackdrop"
+          class="drawer-backdrop"
+          aria-hidden="true"
+        ></div>
+
+        <aside
+          id="utilityDrawer"
+          class="utility-drawer"
+          aria-hidden="true"
+          aria-label="Shortcuts and settings"
+        >
+          <div class="drawer-header">
+            <div>
+              <div class="drawer-kicker">PREFERENCES</div>
+
+              <div class="drawer-title">Shortcuts & Settings</div>
+            </div>
+
+            <button
+              id="drawerCloseBtn"
+              class="drawer-close"
+              type="button"
+              title="Close"
+              aria-label="Close shortcuts and settings"
+            >
+              ×
+            </button>
+          </div>
+
+          <div class="drawer-scroll">
+            <!-- Global shortcuts -->
+            <section class="drawer-section">
+              <div class="sidebar-kicker">GLOBAL SHORTCUTS</div>
+
+              <div class="shortcut-row">
+                <span> Open Assistant </span>
+
+                <button
+                  class="shortcut-capture"
+                  type="button"
+                  data-shortcut-setting="openAssistant"
+                >
+                  Ctrl + Alt + F
+                </button>
+              </div>
+
+              <div class="shortcut-row">
+                <span> Quick Grammar </span>
+
+                <button
+                  class="shortcut-capture"
+                  type="button"
+                  data-shortcut-setting="quickGrammar"
+                >
+                  Ctrl + Alt + R
+                </button>
+              </div>
+
+              <div class="shortcut-row">
+                <span> Quick Understand </span>
+
+                <button
+                  class="shortcut-capture"
+                  type="button"
+                  data-shortcut-setting="quickUnderstand"
+                >
+                  Ctrl + Alt + U
+                </button>
+              </div>
+            </section>
+
+            <!-- In-app hotkeys -->
+            <section class="drawer-section">
+              <div class="sidebar-kicker">IN-APP HOTKEYS</div>
+
+              <div class="key-row">
+                <span>Alt + 1</span>
+                <span>Express Clearly</span>
+              </div>
+
+              <div class="key-row">
+                <span>Alt + 2</span>
+                <span>Understand This</span>
+              </div>
+
+              <div class="key-row">
+                <span>Alt + 3</span>
+                <span>Client Reply</span>
+              </div>
+
+              <div class="key-row">
+                <span>Alt + 4</span>
+                <span>Grammar Only</span>
+              </div>
+
+              <div class="key-row separated">
+                <span>Ctrl + R</span>
+                <span>Refresh Input</span>
+              </div>
+
+              <div class="key-row">
+                <span>Esc</span>
+                <span>Back / Close</span>
+              </div>
+            </section>
+
+            <!-- Settings -->
+            <section class="drawer-section">
+              <div class="sidebar-kicker">SETTINGS</div>
+
+              <label class="setting-row">
+                <span> Default input source </span>
+
+                <select id="defaultInputSource">
+                  <option value="selected">Selected Text</option>
+
+                  <option value="clipboard">Clipboard</option>
+                </select>
+              </label>
+
+              <label class="setting-row">
+                <span> Explain in </span>
+
+                <select id="explanationLanguage">
+                  <option value="simple_english">Simple English</option>
+
+                  <option value="taglish">Taglish</option>
+                </select>
+              </label>
+
+              <div class="setting-note">
+                English, Taglish, and Tagalog input are detected automatically.
+                Writing output stays in natural English.
+              </div>
+            </section>
+
+            <div id="drawerNotice" class="drawer-notice hidden"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
