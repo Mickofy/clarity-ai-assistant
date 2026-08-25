@@ -14,6 +14,8 @@ const path = require("path");
 let mainWindow = null;
 let lastExternalWindowHandle = null;
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
 const WRITING_API_URL = (process.env.WRITING_API_URL || "").replace(/\/+$/, "");
 const WRITING_APP_TOKEN = process.env.WRITING_APP_TOKEN || "";
 
@@ -145,6 +147,7 @@ function runPowerShell(script, timeout = 3000) {
       "powershell.exe",
       [
         "-NoProfile",
+        "-Sta",
         "-NonInteractive",
         "-WindowStyle",
         "Hidden",
@@ -159,7 +162,7 @@ function runPowerShell(script, timeout = 3000) {
         }
 
         resolve(String(stdout || "").trim());
-      }
+      },
     );
   });
 }
@@ -188,47 +191,36 @@ public static class ForegroundWindowReader {
   }
 }
 
-function snapshotClipboard() {
-  const data = {};
-
+async function readClipboardText() {
   try {
-    const text = clipboard.readText();
-    if (text) data.text = text;
-  } catch {}
+    const result = clipboard.readText();
+    const resolved = await Promise.resolve(result);
 
-  try {
-    const html = clipboard.readHTML();
-    if (html) data.html = html;
-  } catch {}
-
-  try {
-    const rtf = clipboard.readRTF();
-    if (rtf) data.rtf = rtf;
-  } catch {}
-
-  try {
-    const image = clipboard.readImage();
-    if (image && !image.isEmpty()) data.image = image;
-  } catch {}
-
-  try {
-    const bookmark = clipboard.readBookmark();
-    if (bookmark?.url) {
-      data.bookmark = bookmark.url;
-      data.title = bookmark.title || "";
+    if (typeof resolved === "string") {
+      return resolved;
     }
-  } catch {}
 
-  return data;
+    if (resolved && typeof resolved.text === "function") {
+      const text = await resolved.text();
+      return typeof text === "string" ? text : "";
+    }
+
+    return "";
+  } catch (error) {
+    console.warn("Could not read clipboard text:", error);
+    return "";
+  }
 }
 
-function restoreClipboard(snapshot) {
+async function writeClipboardText(value) {
   try {
-    clipboard.clear();
-    if (snapshot && Object.keys(snapshot).length) {
-      clipboard.write(snapshot);
-    }
-  } catch {}
+    const result = clipboard.writeText(String(value ?? ""));
+    await Promise.resolve(result);
+    return true;
+  } catch (error) {
+    console.warn("Could not write clipboard text:", error);
+    return false;
+  }
 }
 
 async function sendKeysToWindow(targetHwnd, keys) {
@@ -334,26 +326,87 @@ async function captureSelectedText(targetHwnd) {
     return { ok: false, text: "", reason: "unsupported-platform" };
   }
 
-  const snapshot = snapshotClipboard();
-  const marker = `__CLARITY_SELECTION_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
-  clipboard.writeText(marker);
+  if (!targetHwnd) {
+    return { ok: false, text: "", reason: "no-source-window" };
+  }
 
-  const sent = await sendKeysToWindow(targetHwnd, "^c");
+  const marker = `__CLARITY_SELECTION_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2)}__`;
 
-  if (!sent) {
-    restoreClipboard(snapshot);
+  const markerBase64 = Buffer.from(marker, "utf8").toString("base64");
+
+  const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ClaritySelectionCapture {
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@;
+Add-Type -AssemblyName System.Windows.Forms;
+
+$marker = [System.Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String('${markerBase64}')
+);
+
+$snapshot = $null;
+$copied = '';
+
+try {
+  try {
+    $snapshot = [System.Windows.Forms.Clipboard]::GetDataObject();
+  } catch {}
+
+  [System.Windows.Forms.Clipboard]::SetText($marker);
+
+  [ClaritySelectionCapture]::SetForegroundWindow([IntPtr]${targetHwnd}) | Out-Null;
+  Start-Sleep -Milliseconds 110;
+
+  [System.Windows.Forms.SendKeys]::SendWait('^c');
+  Start-Sleep -Milliseconds 180;
+
+  try {
+    $copied = [System.Windows.Forms.Clipboard]::GetText();
+  } catch {
+    $copied = '';
+  }
+}
+finally {
+  try {
+    if ($null -ne $snapshot) {
+      [System.Windows.Forms.Clipboard]::SetDataObject($snapshot, $true);
+    } else {
+      [System.Windows.Forms.Clipboard]::Clear();
+    }
+  } catch {}
+}
+
+if ($copied -and $copied -ne $marker -and $copied.Trim().Length -gt 0) {
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($copied.Trim());
+  [Convert]::ToBase64String($bytes);
+}
+`;
+
+  try {
+    const encoded = await runPowerShell(script, 5000);
+
+    if (!encoded) {
+      return { ok: false, text: "", reason: "no-selection" };
+    }
+
+    const text = Buffer.from(encoded, "base64").toString("utf8").trim();
+
+    if (!text) {
+      return { ok: false, text: "", reason: "no-selection" };
+    }
+
+    return { ok: true, text, reason: "selection" };
+  } catch (error) {
+    console.warn("Selected-text capture failed:", error);
     return { ok: false, text: "", reason: "capture-failed" };
   }
-
-  await delay(140);
-  const copied = clipboard.readText();
-  restoreClipboard(snapshot);
-
-  if (copied && copied !== marker && copied.trim()) {
-    return { ok: true, text: copied.trim(), reason: "selection" };
-  }
-
-  return { ok: false, text: "", reason: "no-selection" };
 }
 
 async function refreshSelectedText() {
@@ -364,7 +417,7 @@ async function refreshSelectedText() {
   // First try Windows UI Automation. This can read a retained selection
   // from many standard controls without changing focus or hiding Clarity.
   const uiaResult = await readSelectedTextViaUIAutomation(
-    lastExternalWindowHandle
+    lastExternalWindowHandle,
   );
 
   if (uiaResult.ok) {
@@ -374,9 +427,7 @@ async function refreshSelectedText() {
   // Fallback for apps that do not expose TextPattern through UI Automation.
   // Clarity stays visible: focus briefly moves to the source app for Ctrl+C,
   // then immediately returns to Clarity. The clipboard is restored afterward.
-  const fallbackResult = await captureSelectedText(
-    lastExternalWindowHandle
-  );
+  const fallbackResult = await captureSelectedText(lastExternalWindowHandle);
 
   if (mainWindow) {
     mainWindow.show();
@@ -401,30 +452,83 @@ async function replaceSelection(text) {
     };
   }
 
-  const snapshot = snapshotClipboard();
-  clipboard.writeText(value);
+  const valueBase64 = Buffer.from(value, "utf8").toString("base64");
+
+  const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ClarityPasteTarget {
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@;
+Add-Type -AssemblyName System.Windows.Forms;
+
+$value = [System.Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String('${valueBase64}')
+);
+
+$snapshot = $null;
+$success = $false;
+
+try {
+  try {
+    $snapshot = [System.Windows.Forms.Clipboard]::GetDataObject();
+  } catch {}
+
+  [System.Windows.Forms.Clipboard]::SetText($value);
+
+  $activated = [ClarityPasteTarget]::SetForegroundWindow(
+    [IntPtr]${lastExternalWindowHandle}
+  );
+
+  Start-Sleep -Milliseconds 110;
+
+  if ($activated) {
+    [System.Windows.Forms.SendKeys]::SendWait('^v');
+    Start-Sleep -Milliseconds 200;
+    $success = $true;
+  }
+}
+finally {
+  try {
+    if ($null -ne $snapshot) {
+      [System.Windows.Forms.Clipboard]::SetDataObject($snapshot, $true);
+    } else {
+      [System.Windows.Forms.Clipboard]::Clear();
+    }
+  } catch {}
+}
+
+if ($success) {
+  'OK'
+}
+`;
 
   mainWindow?.hide();
   await delay(80);
 
-  const pasted = await sendKeysToWindow(lastExternalWindowHandle, "^v");
-  await delay(180);
-  restoreClipboard(snapshot);
+  try {
+    const output = await runPowerShell(script, 5000);
 
-  if (!pasted) {
-    if (mainWindow) {
-      placeWindow();
-      mainWindow.show();
-      mainWindow.focus();
+    if (output.trim() === "OK") {
+      return { ok: true };
     }
-
-    return {
-      ok: false,
-      error: "Could not replace the selected text. Use Copy instead.",
-    };
+  } catch (error) {
+    console.warn("Replace selection failed:", error);
   }
 
-  return { ok: true };
+  if (mainWindow) {
+    placeWindow();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+
+  return {
+    ok: false,
+    error: "Could not replace the selected text. Use Copy instead.",
+  };
 }
 
 async function resolveInitialInput(action = null) {
@@ -439,10 +543,12 @@ async function resolveInitialInput(action = null) {
   const source = forceSelected ? "selected" : settings.defaultInputSource;
 
   if (source === "clipboard") {
+    const text = (await readClipboardText()).trim();
+
     return {
       source: "clipboard",
-      text: clipboard.readText().trim(),
-      captured: Boolean(clipboard.readText().trim()),
+      text,
+      captured: Boolean(text),
       reason: "clipboard",
     };
   }
@@ -457,10 +563,80 @@ async function resolveInitialInput(action = null) {
   };
 }
 
-async function showAssistant(action = null) {
-  const input = await resolveInitialInput(action);
+function waitForRendererReady() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return Promise.resolve();
+  }
 
-  if (!mainWindow) createWindow();
+  if (!mainWindow.webContents.isLoadingMainFrame()) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    mainWindow.webContents.once("did-finish-load", resolve);
+  });
+}
+
+async function showStartupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+
+  await waitForRendererReady();
+
+  let input = {
+    source: settings?.defaultInputSource || "selected",
+    text: "",
+    captured: false,
+    reason: "startup",
+  };
+
+  if (input.source === "clipboard") {
+    const text = (await readClipboardText()).trim();
+    input = {
+      source: "clipboard",
+      text,
+      captured: Boolean(text),
+      reason: "clipboard",
+    };
+  }
+
+  placeWindow();
+
+  mainWindow.webContents.send("assistant-opened", {
+    ...input,
+    action: null,
+    settings,
+  });
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.focus();
+}
+
+async function showAssistant(action = null) {
+  let input = {
+    source: settings?.defaultInputSource || "selected",
+    text: "",
+    captured: false,
+    reason: "no-selection",
+  };
+
+  try {
+    input = await resolveInitialInput(action);
+  } catch (error) {
+    console.error("Could not resolve initial input:", error);
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+
+  await waitForRendererReady();
 
   placeWindow();
 
@@ -470,7 +646,12 @@ async function showAssistant(action = null) {
     settings,
   });
 
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
   mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
   mainWindow.focus();
 }
 
@@ -481,7 +662,11 @@ function registerCurrentShortcuts(candidateSettings) {
   const entries = [
     ["Open Assistant", shortcuts.openAssistant, () => showAssistant(null)],
     ["Quick Grammar", shortcuts.quickGrammar, () => showAssistant("grammar")],
-    ["Quick Understand", shortcuts.quickUnderstand, () => showAssistant("understand")],
+    [
+      "Quick Understand",
+      shortcuts.quickUnderstand,
+      () => showAssistant("understand"),
+    ],
   ];
 
   const values = entries.map(([, value]) => value);
@@ -491,7 +676,10 @@ function registerCurrentShortcuts(candidateSettings) {
   }
 
   if (new Set(values).size !== values.length) {
-    return { ok: false, error: "Global shortcuts must use different key combinations." };
+    return {
+      ok: false,
+      error: "Global shortcuts must use different key combinations.",
+    };
   }
 
   for (const [label, accelerator, callback] of entries) {
@@ -519,13 +707,17 @@ async function callWritingApi(payload) {
   }
 
   const text = typeof payload?.text === "string" ? payload.text.trim() : "";
-  const context = typeof payload?.context === "string" ? payload.context.trim() : "";
+  const context =
+    typeof payload?.context === "string" ? payload.context.trim() : "";
   const mode = typeof payload?.mode === "string" ? payload.mode : "express";
 
   if (!text) {
     return {
       ok: false,
-      error: mode === "client_reply" ? "Write a rough reply first." : "No text was provided.",
+      error:
+        mode === "client_reply"
+          ? "Write a rough reply first."
+          : "No text was provided.",
     };
   }
 
@@ -564,21 +756,33 @@ async function callWritingApi(payload) {
     try {
       data = await response.json();
     } catch {
-      return { ok: false, error: "The writing service returned an invalid response." };
+      return {
+        ok: false,
+        error: "The writing service returned an invalid response.",
+      };
     }
 
     if (!response.ok) {
-      return { ok: false, error: data?.error || "The writing service is unavailable." };
+      return {
+        ok: false,
+        error: data?.error || "The writing service is unavailable.",
+      };
     }
 
     if (!data?.ok || !data?.result) {
-      return { ok: false, error: "The writing service returned an invalid result." };
+      return {
+        ok: false,
+        error: "The writing service returned an invalid result.",
+      };
     }
 
     return data;
   } catch (error) {
     if (error?.name === "AbortError") {
-      return { ok: false, error: "The request took too long. Please try again." };
+      return {
+        ok: false,
+        error: "The request took too long. Please try again.",
+      };
     }
 
     return { ok: false, error: "Could not connect to the writing service." };
@@ -587,86 +791,124 @@ async function callWritingApi(payload) {
   }
 }
 
-app.whenReady().then(() => {
-  settings = loadSettings();
-  createWindow();
-
-  let registration = registerCurrentShortcuts(settings);
-
-  if (!registration.ok) {
-    console.warn(registration.error);
-    settings = structuredClone(DEFAULT_SETTINGS);
-    registration = registerCurrentShortcuts(settings);
-  }
-
-  ipcMain.handle("get-clipboard", () => clipboard.readText());
-
-  ipcMain.handle("refresh-input", async (_event, source) => {
-    if (source === "clipboard") {
-      const text = clipboard.readText().trim();
-      return { ok: Boolean(text), text, reason: "clipboard" };
+if (gotSingleInstanceLock) {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow();
     }
 
-    return refreshSelectedText();
-  });
-
-  ipcMain.handle("copy-result", (_event, value) => {
-    if (typeof value === "string") clipboard.writeText(value);
-    return true;
-  });
-
-  ipcMain.handle("replace-selection", async (_event, value) => {
-    return replaceSelection(value);
-  });
-
-  ipcMain.handle("hide-window", () => {
-    mainWindow?.hide();
-    return true;
-  });
-
-  ipcMain.handle("minimize-window", () => {
-    mainWindow?.minimize();
-    return true;
-  });
-
-  ipcMain.handle("improve-text", async (_event, payload) => {
-    return callWritingApi(payload);
-  });
-
-  ipcMain.handle("get-settings", () => settings);
-
-  ipcMain.handle("save-settings", (_event, candidate) => {
-    const nextSettings = {
-      ...settings,
-      ...candidate,
-      shortcuts: {
-        ...settings.shortcuts,
-        ...(candidate?.shortcuts || {}),
-      },
-    };
-
-    if (!["selected", "clipboard"].includes(nextSettings.defaultInputSource)) {
-      return { ok: false, error: "Invalid default input source." };
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
     }
 
-    if (!["simple_english", "taglish"].includes(nextSettings.understandExplanation)) {
-      return { ok: false, error: "Invalid explanation language." };
-    }
-
-    const previous = settings;
-    const registrationResult = registerCurrentShortcuts(nextSettings);
-
-    if (!registrationResult.ok) {
-      registerCurrentShortcuts(previous);
-      return registrationResult;
-    }
-
-    settings = nextSettings;
-    saveSettingsFile(settings);
-
-    return { ok: true, settings };
+    placeWindow();
+    mainWindow.show();
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
   });
-});
+
+  app.whenReady().then(async () => {
+    settings = loadSettings();
+    createWindow();
+
+    let registration = registerCurrentShortcuts(settings);
+
+    if (!registration.ok) {
+      console.warn(registration.error);
+      settings = structuredClone(DEFAULT_SETTINGS);
+      registration = registerCurrentShortcuts(settings);
+    }
+
+    ipcMain.handle("get-clipboard", async () => {
+      return readClipboardText();
+    });
+
+    ipcMain.handle("refresh-input", async (_event, source) => {
+      if (source === "clipboard") {
+        const text = (await readClipboardText()).trim();
+        return { ok: Boolean(text), text, reason: "clipboard" };
+      }
+
+      return refreshSelectedText();
+    });
+
+    ipcMain.handle("copy-result", async (_event, value) => {
+      if (typeof value !== "string") {
+        return false;
+      }
+
+      return writeClipboardText(value);
+    });
+
+    ipcMain.handle("replace-selection", async (_event, value) => {
+      return replaceSelection(value);
+    });
+
+    ipcMain.handle("hide-window", () => {
+      mainWindow?.hide();
+      return true;
+    });
+
+    ipcMain.handle("minimize-window", () => {
+      mainWindow?.minimize();
+      return true;
+    });
+
+    ipcMain.handle("improve-text", async (_event, payload) => {
+      return callWritingApi(payload);
+    });
+
+    ipcMain.handle("get-settings", () => settings);
+
+    ipcMain.handle("save-settings", (_event, candidate) => {
+      const nextSettings = {
+        ...settings,
+        ...candidate,
+        shortcuts: {
+          ...settings.shortcuts,
+          ...(candidate?.shortcuts || {}),
+        },
+      };
+
+      if (
+        !["selected", "clipboard"].includes(nextSettings.defaultInputSource)
+      ) {
+        return { ok: false, error: "Invalid default input source." };
+      }
+
+      if (
+        !["simple_english", "taglish"].includes(
+          nextSettings.understandExplanation,
+        )
+      ) {
+        return { ok: false, error: "Invalid explanation language." };
+      }
+
+      const previous = settings;
+      const registrationResult = registerCurrentShortcuts(nextSettings);
+
+      if (!registrationResult.ok) {
+        registerCurrentShortcuts(previous);
+        return registrationResult;
+      }
+
+      settings = nextSettings;
+      saveSettingsFile(settings);
+
+      return { ok: true, settings };
+    });
+
+    await showStartupWindow();
+  });
+
+  app.on("activate", () => {
+    showStartupWindow().catch((error) => {
+      console.error("Could not show Clarity:", error);
+    });
+  });
+} else {
+  app.quit();
+}
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
@@ -675,4 +917,3 @@ app.on("will-quit", () => {
 app.on("window-all-closed", () => {
   // Keep the process alive so global shortcuts continue to work.
 });
-

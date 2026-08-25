@@ -1,16 +1,54 @@
 {
-  "name": "mickofy-writing-assistant",
-  "version": "0.1.0",
+  "name": "clarity-ai-assistant",
+  "productName": "Clarity AI Assistant",
+  "version": "1.0.0",
   "description": "A private desktop writing assistant for clear, professional communication.",
   "main": "src/main.js",
+  "private": true,
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
-  },
-  "devDependencies": {
-    "electron": "^39.0.0"
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "build": "electron-builder --win --x64",
+    "dist": "electron-builder --win --x64"
   },
   "dependencies": {
     "dotenv": "^17.2.0"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.clarityaiassistant.desktop",
+    "productName": "Clarity AI Assistant",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "artifactName": "${productName} Setup ${version}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Clarity AI Assistant",
+      "uninstallDisplayName": "Clarity AI Assistant",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }
