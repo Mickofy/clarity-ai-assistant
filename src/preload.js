@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("writingAssistant", {
 
   installUpdate: () => ipcRenderer.invoke("install-update"),
 
+  assistantFrameReady: (requestId) =>
+    ipcRenderer.send("assistant-frame-ready", requestId),
+
   onAssistantOpened: (callback) => {
     if (typeof callback !== "function") return () => {};
 

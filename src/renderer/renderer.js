@@ -23,6 +23,7 @@ const noticeTitle = document.getElementById("noticeTitle");
 const noticeMessage = document.getElementById("noticeMessage");
 
 const loadingTitle = document.getElementById("loadingTitle");
+const loadingNote = document.querySelector(".loading-note");
 
 const writingResultEyebrow = document.getElementById("writingResultEyebrow");
 const writingResultTitle = document.getElementById("writingResultTitle");
@@ -57,6 +58,36 @@ const roughReply = document.getElementById("roughReply");
 const createReplyBtn = document.getElementById("createReplyBtn");
 const conversationCount = document.getElementById("conversationCount");
 const clearConversationBtn = document.getElementById("clearConversationBtn");
+
+/*
+  CLIENT REPLY UX V2
+
+  Keep the existing HTML as a progressive fallback, then enhance it from
+  renderer.js. This lets the feature evolve without touching the stable
+  shortcut/capture architecture or preload bridge.
+*/
+const clientReplyView = views.clientReply;
+const clientReplyHeading = clientReplyView?.querySelector(".client-heading");
+const clientReplyContextCard = clientContext?.closest(".compact-card");
+const clientReplyInputCard = roughReply?.closest(".reply-card");
+const clientReplyComposeActions = createReplyBtn?.closest(".result-actions");
+
+let clientReplyStage = "compose";
+let clientReplyTone = "professional";
+let clientReplyLength = "normal";
+let clientReplySuggestions = [];
+let clientReplyOriginalIntent = "";
+let clientReplyHistoryExpanded = false;
+
+let clientReplyPreferences = null;
+let clientReplyHistoryPanel = null;
+let clientReplyHistoryToggle = null;
+let clientReplySuggestionsPanel = null;
+let clientReplySuggestionsList = null;
+let clientReplyEditorPanel = null;
+let clientReplyEditor = null;
+let clientReplyEditorLabel = null;
+let clientReplyEditorMeta = null;
 
 const defaultInputSource = document.getElementById("defaultInputSource");
 const explanationLanguage = document.getElementById("explanationLanguage");
@@ -434,20 +465,1015 @@ async function switchSource(source) {
   }
 }
 
-function setLoading(mode) {
-  const messages = {
-    express: "Understanding what you want to say…",
+function initializeClientReplyUi() {
+  if (
+    !clientReplyView ||
+    !clientReplyHeading ||
+    !clientReplyContextCard ||
+    !clientReplyInputCard ||
+    !clientReplyComposeActions
+  ) {
+    return;
+  }
 
-    understand: "Making this easier to understand…",
+  const headingTitle = clientReplyHeading.querySelector("h2");
+  const headingDescription = clientReplyHeading.querySelector("p");
 
-    client_reply: "Building a clear client reply…",
+  if (headingTitle) {
+    headingTitle.textContent = "Create the right reply";
+  }
 
-    grammar: "Correcting the English…",
-  };
+  if (headingDescription) {
+    headingDescription.textContent =
+      "Add what you want to say, or leave it blank and Clarity can draft it.";
+  }
 
-  loadingTitle.textContent = messages[mode] || "Working on your message…";
+  const contextLabel = clientReplyContextCard.querySelector(".card-label");
+
+  if (contextLabel) {
+    contextLabel.textContent = "CLIENT MESSAGE";
+  }
+
+  const roughLabel = clientReplyInputCard.querySelector(".card-label");
+
+  if (roughLabel) {
+    roughLabel.textContent = "WHAT DO YOU WANT TO SAY?";
+  }
+
+  roughReply.placeholder =
+    "Optional — type your intent, key points, or a rough response. Leave blank and Clarity will draft from the client message.";
+
+  const roughHelper = document.createElement("div");
+  roughHelper.className = "client-reply-helper";
+  roughHelper.textContent = "OPTIONAL · English, Taglish, or Tagalog is okay.";
+
+  roughReply.insertAdjacentElement("afterend", roughHelper);
+
+  clientReplyPreferences = document.createElement("section");
+  clientReplyPreferences.className = "client-reply-preferences";
+  clientReplyPreferences.innerHTML = `
+    <div class="client-preference-group">
+      <div class="client-preference-label">TONE</div>
+      <div class="client-segmented" role="group" aria-label="Reply tone">
+        <button type="button" data-client-tone="professional">Professional</button>
+        <button type="button" data-client-tone="friendly">Friendly</button>
+        <button type="button" data-client-tone="firm">Firm</button>
+      </div>
+    </div>
+
+    <div class="client-preference-group">
+      <div class="client-preference-label">LENGTH</div>
+      <div class="client-segmented" role="group" aria-label="Reply length">
+        <button type="button" data-client-length="short">Short</button>
+        <button type="button" data-client-length="normal">Normal</button>
+        <button type="button" data-client-length="detailed">Detailed</button>
+      </div>
+    </div>
+  `;
+
+  clientReplyInputCard.insertAdjacentElement(
+    "afterend",
+    clientReplyPreferences,
+  );
+
+  clientReplyHistoryPanel = document.createElement("section");
+  clientReplyHistoryPanel.className = "result-card client-history-panel hidden";
+
+  clientReplyHistoryPanel.innerHTML = `
+    <div class="card-label">RECENT CONVERSATION</div>
+    <div class="client-history-list"></div>
+  `;
+
+  clientReplyContextCard.insertAdjacentElement(
+    "afterend",
+    clientReplyHistoryPanel,
+  );
+
+  clientReplyHistoryToggle = document.createElement("button");
+  clientReplyHistoryToggle.type = "button";
+  clientReplyHistoryToggle.className = "text-button client-history-toggle";
+  clientReplyHistoryToggle.textContent = "VIEW";
+
+  clearConversationBtn.insertAdjacentElement(
+    "beforebegin",
+    clientReplyHistoryToggle,
+  );
+
+  clientReplySuggestionsPanel = document.createElement("section");
+  clientReplySuggestionsPanel.className =
+    "client-reply-stage client-suggestions-stage hidden";
+
+  clientReplySuggestionsPanel.innerHTML = `
+    <div class="client-stage-toolbar">
+      <div>
+        <div class="client-stage-kicker">3 SUGGESTIONS</div>
+        <div class="client-stage-description">
+          Choose the closest reply. You can edit it before copying.
+        </div>
+      </div>
+
+      <button
+        id="clientNewOptionsBtn"
+        class="text-button"
+        type="button"
+      >
+        NEW OPTIONS
+      </button>
+    </div>
+
+    <div
+      class="client-suggestion-list"
+      id="clientSuggestionList"
+      aria-live="polite"
+    ></div>
+
+    <div class="client-stage-actions">
+      <button
+        id="clientSuggestionsBackBtn"
+        class="secondary-action"
+        type="button"
+      >
+        BACK
+      </button>
+    </div>
+  `;
+
+  clientReplyComposeActions.insertAdjacentElement(
+    "beforebegin",
+    clientReplySuggestionsPanel,
+  );
+
+  clientReplySuggestionsList = clientReplySuggestionsPanel.querySelector(
+    "#clientSuggestionList",
+  );
+
+  clientReplyEditorPanel = document.createElement("section");
+  clientReplyEditorPanel.className =
+    "client-reply-stage client-editor-stage hidden";
+
+  clientReplyEditorPanel.innerHTML = `
+    <div class="client-stage-toolbar client-editor-toolbar">
+      <div>
+        <div class="client-stage-kicker">YOUR REPLY</div>
+        <div
+          id="clientReplyEditorLabel"
+          class="client-editor-option-label"
+        >
+          SELECTED OPTION
+        </div>
+      </div>
+
+      <button
+        id="clientEditorNewOptionsBtn"
+        class="text-button"
+        type="button"
+      >
+        NEW OPTIONS
+      </button>
+    </div>
+
+    <div class="client-editor-card">
+      <textarea
+        id="clientReplyEditor"
+        spellcheck="true"
+        aria-label="Editable client reply"
+      ></textarea>
+
+      <div class="client-editor-meta">
+        <span id="clientReplyEditorMeta">
+          Editable — AI actions use the text currently shown here.
+        </span>
+      </div>
+    </div>
+
+    <div class="client-refine-actions" aria-label="Refine reply">
+      <button type="button" data-client-refine="grammar">GRAMMAR</button>
+      <button type="button" data-client-refine="improve">IMPROVE REPLY</button>
+      <button type="button" data-client-refine="shorter">SHORTER</button>
+    </div>
+
+    <div class="client-stage-actions client-editor-actions">
+      <button
+        id="clientEditorBackBtn"
+        class="secondary-action"
+        type="button"
+      >
+        BACK TO OPTIONS
+      </button>
+
+      <button
+        id="clientCopyReplyBtn"
+        class="primary-action"
+        type="button"
+      >
+        COPY REPLY
+      </button>
+    </div>
+  `;
+
+  clientReplySuggestionsPanel.insertAdjacentElement(
+    "afterend",
+    clientReplyEditorPanel,
+  );
+
+  clientReplyEditor =
+    clientReplyEditorPanel.querySelector("#clientReplyEditor");
+
+  clientReplyEditorLabel = clientReplyEditorPanel.querySelector(
+    "#clientReplyEditorLabel",
+  );
+
+  clientReplyEditorMeta = clientReplyEditorPanel.querySelector(
+    "#clientReplyEditorMeta",
+  );
+
+  createReplyBtn.textContent = "CREATE 3 REPLIES";
+
+  clientReplyPreferences
+    .querySelectorAll("[data-client-tone]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        clientReplyTone = button.dataset.clientTone || "professional";
+        updateClientReplyPreferenceUi();
+      });
+    });
+
+  clientReplyPreferences
+    .querySelectorAll("[data-client-length]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        clientReplyLength = button.dataset.clientLength || "normal";
+        updateClientReplyPreferenceUi();
+      });
+    });
+
+  clientReplyHistoryToggle.addEventListener("click", () => {
+    clientReplyHistoryExpanded = !clientReplyHistoryExpanded;
+    renderClientReplyContext();
+  });
+
+  clientReplySuggestionsPanel
+    .querySelector("#clientNewOptionsBtn")
+    ?.addEventListener("click", () => generateClientReplySuggestions());
+
+  clientReplySuggestionsPanel
+    .querySelector("#clientSuggestionsBackBtn")
+    ?.addEventListener("click", () => setClientReplyStage("compose"));
+
+  clientReplyEditorPanel
+    .querySelector("#clientEditorNewOptionsBtn")
+    ?.addEventListener("click", () => generateClientReplySuggestions());
+
+  clientReplyEditorPanel
+    .querySelector("#clientEditorBackBtn")
+    ?.addEventListener("click", () => setClientReplyStage("suggestions"));
+
+  clientReplyEditorPanel
+    .querySelector("#clientCopyReplyBtn")
+    ?.addEventListener("click", copyClientReplyEditor);
+
+  clientReplyEditorPanel
+    .querySelectorAll("[data-client-refine]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        refineClientReply(button.dataset.clientRefine);
+      });
+    });
+
+  updateClientReplyPreferenceUi();
+  setClientReplyStage("compose");
+}
+
+function updateClientReplyPreferenceUi() {
+  clientReplyPreferences
+    ?.querySelectorAll("[data-client-tone]")
+    .forEach((button) => {
+      const active = button.dataset.clientTone === clientReplyTone;
+
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+
+  clientReplyPreferences
+    ?.querySelectorAll("[data-client-length]")
+    .forEach((button) => {
+      const active = button.dataset.clientLength === clientReplyLength;
+
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+}
+
+function clientReplyLatestMessage() {
+  return pendingClientContext || sourceText.value.trim();
+}
+
+function renderClientReplyContext() {
+  const latest = clientReplyLatestMessage();
+
+  clientContext.textContent = latest || "No client message is available.";
+
+  updateConversationCount();
+
+  const historyList = clientReplyHistoryPanel?.querySelector(
+    ".client-history-list",
+  );
+
+  if (historyList) {
+    historyList.innerHTML = "";
+
+    conversationHistory.slice(-6).forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "client-history-row";
+
+      const role = document.createElement("span");
+      role.className = "client-history-role";
+      role.textContent = entry.role === "client" ? "CLIENT" : "YOU";
+
+      const text = document.createElement("div");
+      text.className = "client-history-text";
+      text.textContent = entry.text;
+
+      row.append(role, text);
+      historyList.appendChild(row);
+    });
+  }
+
+  const hasHistory = conversationHistory.length > 0;
+
+  if (clientReplyHistoryToggle) {
+    clientReplyHistoryToggle.classList.toggle("hidden", !hasHistory);
+
+    clientReplyHistoryToggle.textContent = clientReplyHistoryExpanded
+      ? "HIDE"
+      : "VIEW";
+  }
+
+  clientReplyHistoryPanel?.classList.toggle(
+    "hidden",
+    !hasHistory || !clientReplyHistoryExpanded,
+  );
+}
+
+function setClientReplyHeading(stage) {
+  const title = clientReplyHeading?.querySelector("h2");
+  const description = clientReplyHeading?.querySelector("p");
+
+  if (!title || !description) {
+    return;
+  }
+
+  if (stage === "suggestions") {
+    title.textContent = "Choose a reply";
+    description.textContent =
+      "Pick the closest option. You can edit it before copying.";
+    return;
+  }
+
+  if (stage === "editor") {
+    title.textContent = "Edit your reply";
+    description.textContent =
+      "Make any changes, then use AI tools or copy when ready.";
+    return;
+  }
+
+  title.textContent = "Create the right reply";
+  description.textContent =
+    "Add what you want to say, or leave it blank and Clarity can draft it.";
+}
+
+function setClientReplyStage(stage) {
+  clientReplyStage = stage;
+
+  const composing = stage === "compose";
+  const choosing = stage === "suggestions";
+  const editing = stage === "editor";
+
+  clientReplyView
+    ?.querySelector(".conversation-strip")
+    ?.classList.toggle("hidden", !composing);
+
+  clientReplyContextCard?.classList.toggle("hidden", !composing);
+  clientReplyInputCard?.classList.toggle("hidden", !composing);
+  clientReplyPreferences?.classList.toggle("hidden", !composing);
+  clientReplyComposeActions?.classList.toggle("hidden", !composing);
+
+  if (!composing) {
+    clientReplyHistoryPanel?.classList.add("hidden");
+  } else {
+    renderClientReplyContext();
+  }
+
+  clientReplySuggestionsPanel?.classList.toggle("hidden", !choosing);
+
+  clientReplyEditorPanel?.classList.toggle("hidden", !editing);
+
+  setClientReplyHeading(stage);
+
+  if (editing) {
+    requestAnimationFrame(() => {
+      clientReplyEditor?.focus();
+    });
+  } else if (composing) {
+    requestAnimationFrame(() => {
+      roughReply?.focus();
+    });
+  }
+}
+
+function openClientReplyComposer(clientMessage) {
+  pendingClientContext = String(clientMessage || "").trim();
+
+  clientReplyOriginalIntent = "";
+  clientReplySuggestions = [];
+  clientReplyHistoryExpanded = false;
+
+  roughReply.value = "";
+
+  renderClientReplyContext();
+  updateClientReplyPreferenceUi();
+
+  showView("clientReply");
+  setClientReplyStage("compose");
+}
+
+function clientReplyToneLabel() {
+  return (
+    {
+      professional: "Professional",
+      friendly: "Friendly",
+      firm: "Firm",
+    }[clientReplyTone] || "Professional"
+  );
+}
+
+function clientReplyLengthLabel() {
+  return (
+    {
+      short: "Short",
+      normal: "Normal",
+      detailed: "Detailed",
+    }[clientReplyLength] || "Normal"
+  );
+}
+
+function clientReplyVariationProfiles() {
+  if (clientReplyTone === "friendly") {
+    return [
+      {
+        label: "Friendly",
+        description: "Natural, warm, and easy to send.",
+        directive:
+          "Use a friendly, natural, conversational client tone while staying professional.",
+      },
+      {
+        label: "Warm & Professional",
+        description: "Friendly with a little more polish.",
+        directive:
+          "Use a warm professional tone: approachable, polished, and client-safe.",
+      },
+      {
+        label: "Friendly & Direct",
+        description: "Warm but more concise and decisive.",
+        directive:
+          "Use a friendly but direct tone. Be clear and decisive without sounding cold.",
+      },
+    ];
+  }
+
+  if (clientReplyTone === "firm") {
+    return [
+      {
+        label: "Firm & Professional",
+        description: "Clear boundaries without sounding harsh.",
+        directive:
+          "Use a firm professional tone. Set clear expectations without sounding rude or defensive.",
+      },
+      {
+        label: "Firm but Warm",
+        description: "Keeps the boundary with a softer delivery.",
+        directive:
+          "Keep the message firm, but soften the delivery with a respectful and collaborative tone.",
+      },
+      {
+        label: "Direct & Firm",
+        description: "Straight to the point and confident.",
+        directive:
+          "Be direct, confident, and firm. Avoid unnecessary filler while remaining respectful.",
+      },
+    ];
+  }
+
+  return [
+    {
+      label: "Professional",
+      description: "Balanced, polished, and client-safe.",
+      directive:
+        "Use a polished professional tone that feels natural, clear, and client-ready.",
+    },
+    {
+      label: "Warm Professional",
+      description: "Professional with a more human tone.",
+      directive:
+        "Use a professional tone with a little more warmth and conversational flow.",
+    },
+    {
+      label: "Direct Professional",
+      description: "Clearer and more decisive.",
+      directive:
+        "Use a professional, direct tone. Be concise and decisive without sounding abrupt.",
+    },
+  ];
+}
+
+function buildClientReplyAiContext({
+  variationDirective = "",
+  taskDirective = "",
+  forceLength = "",
+} = {}) {
+  const latest = clientReplyLatestMessage();
+
+  const baseContext = buildConversationContext(latest);
+
+  const length = forceLength || clientReplyLengthLabel();
+
+  const instructions = [
+    "CLIENT REPLY PREFERENCES:",
+    `Tone: ${clientReplyToneLabel()}`,
+    `Length: ${length}`,
+    variationDirective ? `Variation: ${variationDirective}` : "",
+    "",
+    "CLIENT REPLY RULES:",
+    "- Reply to the latest client message, using recent conversation only as supporting context.",
+    "- Preserve the user's intent and factual meaning.",
+    "- Do not invent prices, deadlines, promises, completed work, availability, or other facts that are not supported.",
+    "- Keep the reply natural and ready to send.",
+    "- Do not add labels, analysis, explanations, or quotation marks around the reply.",
+    taskDirective ? `- Current task: ${taskDirective}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return `${baseContext}\n\n${instructions}`.trim();
+}
+
+function clientReplyRequestText(profile = null) {
+  const rough = clientReplyOriginalIntent.trim();
+
+  if (rough) {
+    return rough;
+  }
+
+  /*
+    CLIENT REPLY BLANK-INTENT FALLBACK
+
+    The current backend was originally designed to rewrite a user's rough
+    response. When the textarea is intentionally blank, sending only a generic
+    instruction can be treated as the text to rewrite instead of as a request
+    to draft a reply.
+
+    Put the actual client message + drafting instructions directly inside the
+    `text` field as well as the normal `context` field. This makes blank-intent
+    generation explicit even with the existing backend contract.
+  */
+  const latest = clientReplyLatestMessage();
+  const conversation = buildConversationContext(latest);
+
+  return [
+    "DRAFT MODE — the user has NOT written a rough reply.",
+    "Write the actual message the user can send to the client.",
+    "Do not rewrite or repeat these instructions.",
+    "",
+    conversation,
+    "",
+    "REPLY PREFERENCES:",
+    `Tone: ${clientReplyToneLabel()}`,
+    `Length: ${clientReplyLengthLabel()}`,
+    profile?.directive ? `Variation: ${profile.directive}` : "",
+    "",
+    "RULES:",
+    "- Respond to the latest client message.",
+    "- Use recent conversation only as supporting context.",
+    "- Keep the reply useful even when the user's exact intent is unknown.",
+    "- Prefer a safe acknowledgement or clarification when a factual commitment cannot be inferred.",
+    "- Do not invent prices, deadlines, availability, completed work, approvals, or promises.",
+    "- Return only the client-ready reply. No labels, notes, analysis, or quotation marks.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeClientReplyResult(response) {
+  const text =
+    typeof response?.result?.text === "string"
+      ? response.result.text.trim()
+      : "";
+
+  return text;
+}
+
+function setClientReplyLoading(title, note) {
+  loadingTitle.textContent = title;
+
+  if (loadingNote) {
+    loadingNote.textContent = note;
+  }
 
   showView("loading");
+}
+
+async function requestClientReplyVariation(profile) {
+  const response = await window.writingAssistant.improveText({
+    text: clientReplyRequestText(profile),
+    context: buildClientReplyAiContext({
+      variationDirective: profile.directive,
+      taskDirective:
+        "Create one distinct reply option. Keep the same facts and intent, but make this option meaningfully different in phrasing and delivery from other variants.",
+    }),
+    mode: "client_reply",
+    explanationLanguage: currentSettings.understandExplanation,
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error || "Could not create a client reply.");
+  }
+
+  const text = normalizeClientReplyResult(response);
+
+  if (!text) {
+    throw new Error("The writing service returned an empty reply.");
+  }
+
+  return {
+    ...profile,
+    text,
+  };
+}
+
+function renderClientReplySuggestions() {
+  if (!clientReplySuggestionsList) {
+    return;
+  }
+
+  clientReplySuggestionsList.innerHTML = "";
+
+  clientReplySuggestions.forEach((suggestion, index) => {
+    const card = document.createElement("article");
+    card.className = "client-suggestion-card";
+
+    const top = document.createElement("div");
+    top.className = "client-suggestion-top";
+
+    const identity = document.createElement("div");
+
+    const option = document.createElement("div");
+    option.className = "client-suggestion-option";
+    option.textContent = `0${index + 1} · ${suggestion.label}`;
+
+    const description = document.createElement("div");
+    description.className = "client-suggestion-description";
+    description.textContent = suggestion.description;
+
+    identity.append(option, description);
+
+    const useButton = document.createElement("button");
+    useButton.type = "button";
+    useButton.className = "client-use-button";
+    useButton.textContent = "USE THIS";
+
+    useButton.addEventListener("click", () => {
+      chooseClientReplySuggestion(index);
+    });
+
+    top.append(identity, useButton);
+
+    const preview = document.createElement("div");
+    preview.className = "client-suggestion-preview";
+    preview.textContent = suggestion.text;
+
+    card.append(top, preview);
+    clientReplySuggestionsList.appendChild(card);
+  });
+}
+
+async function generateClientReplySuggestions() {
+  const latest = clientReplyLatestMessage();
+
+  if (!latest) {
+    showNotice(
+      "No client message",
+      "Add or select the client's message first.",
+    );
+
+    setClientReplyStage("compose");
+    return;
+  }
+
+  if (clientReplyStage === "compose") {
+    clientReplyOriginalIntent = roughReply.value.trim();
+  }
+
+  currentWritingMode = "client_reply";
+
+  setClientReplyLoading(
+    "Creating 3 reply options…",
+    `${clientReplyToneLabel()} tone · ${clientReplyLengthLabel()} length`,
+  );
+
+  const profiles = clientReplyVariationProfiles();
+
+  const settled = await Promise.allSettled(
+    profiles.map((profile) => requestClientReplyVariation(profile)),
+  );
+
+  settled.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.warn(
+        "[CLARITY CLIENT REPLY]",
+        `Option ${index + 1} failed:`,
+        result.reason?.message || result.reason,
+      );
+    }
+  });
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const result of settled) {
+    if (result.status !== "fulfilled") {
+      continue;
+    }
+
+    const key = result.value.text.replace(/\s+/g, " ").trim().toLowerCase();
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(result.value);
+  }
+
+  if (!unique.length) {
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    const firstError = settled.find((result) => result.status === "rejected");
+
+    showNotice(
+      "Could not create reply options",
+      firstError?.reason?.message || "Try again in a moment.",
+    );
+
+    return;
+  }
+
+  clientReplySuggestions = unique.slice(0, 3);
+
+  renderClientReplySuggestions();
+
+  showView("clientReply");
+  setClientReplyStage("suggestions");
+}
+
+function chooseClientReplySuggestion(index) {
+  const suggestion = clientReplySuggestions[index];
+
+  if (!suggestion || !clientReplyEditor) {
+    return;
+  }
+
+  currentWritingMode = "client_reply";
+
+  clientReplyEditor.value = suggestion.text;
+
+  if (clientReplyEditorLabel) {
+    clientReplyEditorLabel.textContent = suggestion.label;
+  }
+
+  if (clientReplyEditorMeta) {
+    clientReplyEditorMeta.textContent =
+      "Editable — Grammar and Improve Reply use the text currently shown here.";
+  }
+
+  setClientReplyStage("editor");
+}
+
+async function refineClientReply(kind) {
+  const currentText = clientReplyEditor?.value.trim() || "";
+
+  if (!currentText) {
+    showNotice("Nothing to improve", "Write or choose a reply first.");
+
+    clientReplyEditor?.focus();
+    return;
+  }
+
+  if (kind === "grammar") {
+    setClientReplyLoading(
+      "Checking the grammar…",
+      "Keeping your meaning and wording as close as possible.",
+    );
+
+    const response = await window.writingAssistant.improveText({
+      text: currentText,
+      mode: "grammar",
+      explanationLanguage: currentSettings.understandExplanation,
+    });
+
+    showView("clientReply");
+    setClientReplyStage("editor");
+
+    if (!response?.ok) {
+      showNotice(
+        "Could not fix the grammar",
+        response?.error || "Try again in a moment.",
+      );
+      return;
+    }
+
+    const updated = normalizeClientReplyResult(response);
+
+    if (updated) {
+      clientReplyEditor.value = updated;
+    }
+
+    return;
+  }
+
+  const isShorter = kind === "shorter";
+
+  setClientReplyLoading(
+    isShorter ? "Making the reply shorter…" : "Improving your reply…",
+    isShorter
+      ? "Keeping the important meaning while removing extra words."
+      : "Improving clarity, tone, and flow without changing your intent.",
+  );
+
+  const response = await window.writingAssistant.improveText({
+    text: currentText,
+    context: buildClientReplyAiContext({
+      forceLength: isShorter ? "Short" : "",
+      taskDirective: isShorter
+        ? "Make the CURRENT REPLY shorter and more concise. Preserve every important fact and commitment. Do not add new information."
+        : "Improve the CURRENT REPLY's clarity, professionalism, tone, and flow. Preserve the user's meaning and do not add unsupported information.",
+    }),
+    mode: "client_reply",
+    explanationLanguage: currentSettings.understandExplanation,
+  });
+
+  showView("clientReply");
+  setClientReplyStage("editor");
+
+  if (!response?.ok) {
+    showNotice(
+      isShorter ? "Could not shorten the reply" : "Could not improve the reply",
+      response?.error || "Try again in a moment.",
+    );
+
+    return;
+  }
+
+  const updated = normalizeClientReplyResult(response);
+
+  if (updated) {
+    clientReplyEditor.value = updated;
+  }
+}
+
+async function copyClientReplyEditor() {
+  const text = clientReplyEditor?.value.trim() || "";
+
+  if (!text) {
+    return;
+  }
+
+  commitConversationReply(text);
+
+  await window.writingAssistant.copyResult(text);
+
+  await hideClarityWindow();
+}
+
+function setLoading(mode) {
+  const states = {
+    express: {
+      title: "Organizing your thoughts…",
+      note: "Creating a clearer version.",
+    },
+
+    understand: {
+      title: "Making this easier to understand…",
+      note: "Analyzing selected text.",
+    },
+
+    client_reply: {
+      title: "Creating reply options…",
+      note: "Building client-ready responses from your message and context.",
+    },
+
+    grammar: {
+      title: "Correcting the English…",
+      note: "Processing selected text.",
+    },
+  };
+
+  const state = states[mode] || {
+    title: "Working on your message…",
+    note: "Processing your text.",
+  };
+
+  loadingTitle.textContent = state.title;
+
+  if (loadingNote) {
+    loadingNote.textContent = state.note;
+  }
+
+  showView("loading");
+}
+
+/*
+  FIRST SCREEN FOR GLOBAL SHORTCUTS
+
+  This view is prepared before the BrowserWindow becomes opaque.
+
+  It replaces:
+    - a blank/black BrowserWindow
+    - the old Home screen
+    - the previous Result screen
+
+  with a deliberate Clarity loading state.
+*/
+function setShortcutCaptureLoading(action, reason) {
+  let title = "Capturing selection…";
+  let note = "Reading text from the active window.";
+
+  if (action === "express") {
+    title = "Reading selected text…";
+    note = "Preparing Express Clearly.";
+  } else if (action === "understand") {
+    title = "Reading selected text…";
+    note = "Preparing Understand This.";
+  } else if (action === "client_reply") {
+    title = "Reading client message…";
+    note = "Preparing Client Reply.";
+  } else if (action === "grammar") {
+    title = "Reading selected text…";
+    note = "Preparing Grammar Only.";
+  } else if (reason === "loading") {
+    title = "Loading clipboard…";
+    note = "Reading copied text.";
+  }
+
+  loadingTitle.textContent = title;
+
+  if (loadingNote) {
+    loadingNote.textContent = note;
+  }
+
+  showView("loading");
+}
+
+/*
+  Hide/minimize immediately.
+
+  We no longer replace the current screen with a generic "Ready…" frame
+  before hiding. The main process now waits for the exact next shortcut
+  screen to be painted before revealing the BrowserWindow again.
+*/
+async function hideClarityWindow() {
+  return window.writingAssistant.hideWindow();
+}
+
+async function minimizeClarityWindow() {
+  return window.writingAssistant.minimizeWindow();
+}
+
+function notifyAssistantFrameReady(requestId) {
+  const id = Number(requestId);
+
+  if (!Number.isFinite(id)) {
+    return;
+  }
+
+  /*
+    main.js shows the BrowserWindow at opacity 0 before waiting here, so the
+    page is considered visible by Chromium and requestAnimationFrame can run
+    normally.
+
+    Wait for fonts, then two animation frames:
+      frame 1 -> DOM/style/layout settle
+      frame 2 -> painted loading frame is ready to present
+  */
+  Promise.resolve(document.fonts?.ready)
+    .catch(() => undefined)
+    .then(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.writingAssistant.assistantFrameReady(id);
+        });
+      });
+    });
 }
 
 function resetWritingResult() {
@@ -573,7 +1599,9 @@ function buildConversationContext(latestClientText) {
 }
 
 function updateConversationCount() {
-  conversationCount.textContent = `SESSION CONTEXT: ${conversationHistory.length} MESSAGE${conversationHistory.length === 1 ? "" : "S"}`;
+  conversationCount.textContent = `CONVERSATION CONTEXT · ${conversationHistory.length} MESSAGE${
+    conversationHistory.length === 1 ? "" : "S"
+  }`;
 }
 
 async function runMode(mode) {
@@ -595,18 +1623,7 @@ async function runMode(mode) {
   }
 
   if (mode === "client_reply") {
-    pendingClientContext = text;
-
-    clientContext.textContent = buildConversationContext(text);
-
-    roughReply.value = "";
-
-    updateConversationCount();
-
-    showView("clientReply");
-
-    roughReply.focus();
-
+    openClientReplyComposer(text);
     return;
   }
 
@@ -638,45 +1655,8 @@ async function runMode(mode) {
 }
 
 async function createClientReply() {
-  const text = roughReply.value.trim();
-
-  if (!text) {
-    showNotice(
-      "Write a rough response first",
-      "English, Taglish, or Tagalog is okay.",
-    );
-
-    roughReply.focus();
-
-    return;
-  }
-
-  const context = buildConversationContext(
-    pendingClientContext || sourceText.value.trim(),
-  );
-
-  setLoading("client_reply");
-
-  const response = await window.writingAssistant.improveText({
-    text,
-    context,
-    mode: "client_reply",
-
-    explanationLanguage: currentSettings.understandExplanation,
-  });
-
-  if (!response?.ok) {
-    showView("clientReply");
-
-    showNotice(
-      "Could not create the reply",
-      response?.error || "Try again in a moment.",
-    );
-
-    return;
-  }
-
-  renderWritingResult("client_reply", response.result);
+  clientReplyOriginalIntent = roughReply.value.trim();
+  await generateClientReplySuggestions();
 }
 
 function commitConversationReply(finalText) {
@@ -701,6 +1681,10 @@ function commitConversationReply(finalText) {
   conversationHistory = conversationHistory.slice(-8);
 
   pendingClientContext = "";
+
+  clientReplyOriginalIntent = "";
+  clientReplySuggestions = [];
+  clientReplyHistoryExpanded = false;
 
   updateConversationCount();
 }
@@ -909,9 +1893,25 @@ sourceScrollbar?.addEventListener("pointerdown", (event) => {
 
 window.addEventListener("resize", scheduleSourceScrollbarUpdate);
 
+initializeClientReplyUi();
+
 /* Back buttons */
 document.querySelectorAll("[data-back]").forEach((button) => {
-  button.addEventListener("click", () => showView("main"));
+  button.addEventListener("click", () => {
+    if (currentView === "clientReply" && button.closest("#clientReplyView")) {
+      if (clientReplyStage === "editor") {
+        setClientReplyStage("suggestions");
+        return;
+      }
+
+      if (clientReplyStage === "suggestions") {
+        setClientReplyStage("compose");
+        return;
+      }
+    }
+
+    showView("main");
+  });
 });
 
 createReplyBtn.addEventListener("click", createClientReply);
@@ -927,7 +1927,7 @@ copySuggestionBtn.addEventListener("click", async () => {
 
   await window.writingAssistant.copyResult(text);
 
-  await window.writingAssistant.hideWindow();
+  await hideClarityWindow();
 });
 
 replaceSuggestionBtn.addEventListener("click", async () => {
@@ -937,9 +1937,23 @@ replaceSuggestionBtn.addEventListener("click", async () => {
     return;
   }
 
+  /*
+    replaceSelection() hides Clarity from the main process so Windows can
+    focus the source application and paste into it. Paint a neutral screen
+    first so the next shortcut never restores this old result frame.
+  */
+  prepareWindowForBackground();
+  await waitForUiPaint();
+
   const result = await window.writingAssistant.replaceSelection(text);
 
   if (!result?.ok) {
+    /*
+      Replace failed and Clarity was restored by the main process.
+      Return to the existing result instead of leaving the loading view up.
+    */
+    showView("writingResult");
+
     showNotice(
       "Could not replace the selection",
       result?.error || "Use Copy instead.",
@@ -952,27 +1966,13 @@ replaceSuggestionBtn.addEventListener("click", async () => {
 });
 
 helpReplyBtn.addEventListener("click", () => {
-  pendingClientContext = sourceText.value.trim();
-
-  clientContext.textContent = buildConversationContext(pendingClientContext);
-
-  roughReply.value = "";
-
-  updateConversationCount();
-
-  showView("clientReply");
-
-  roughReply.focus();
+  openClientReplyComposer(sourceText.value.trim());
 });
 
 clearConversationBtn.addEventListener("click", () => {
   conversationHistory = [];
-
-  updateConversationCount();
-
-  if (pendingClientContext) {
-    clientContext.textContent = buildConversationContext(pendingClientContext);
-  }
+  clientReplyHistoryExpanded = false;
+  renderClientReplyContext();
 });
 
 /* Window + drawer */
@@ -1015,11 +2015,13 @@ restartUpdateBtn?.addEventListener("click", async () => {
   }
 });
 
-minimizeBtn.addEventListener("click", () =>
-  window.writingAssistant.minimizeWindow(),
-);
+minimizeBtn.addEventListener("click", () => {
+  minimizeClarityWindow();
+});
 
-closeBtn.addEventListener("click", () => window.writingAssistant.hideWindow());
+closeBtn.addEventListener("click", () => {
+  hideClarityWindow();
+});
 
 /* Settings */
 defaultInputSource.addEventListener("change", async () => {
@@ -1107,7 +2109,7 @@ document.addEventListener("keydown", async (event) => {
     }
 
     if (currentView === "main") {
-      await window.writingAssistant.hideWindow();
+      await hideClarityWindow();
     } else {
       showView("main");
     }
@@ -1156,7 +2158,8 @@ document.addEventListener("keydown", async (event) => {
   if (
     (event.ctrlKey || event.metaKey) &&
     event.key === "Enter" &&
-    currentView === "clientReply"
+    currentView === "clientReply" &&
+    clientReplyStage === "compose"
   ) {
     event.preventDefault();
 
@@ -1185,23 +2188,120 @@ window.writingAssistant.onAssistantOpened(async (payload) => {
 
   sourceBuffers[currentSource] = payload?.text || "";
 
-  sourceInitialized[currentSource] = true;
+  const isTemporaryCapture =
+    payload?.phase === "capture" ||
+    payload?.reason === "capturing" ||
+    payload?.reason === "loading";
+
+  sourceInitialized[currentSource] = !isTemporaryCapture;
 
   updateSourceTabs();
   loadCurrentSourceBuffer();
-  showView("main");
 
+  /*
+    FIRST / HIDDEN FRAME
+
+    Build the exact screen that should be visible BEFORE main.js reveals
+    the native BrowserWindow. After it has painted, notify the main process.
+
+    This is what prevents a cached previous screen or the old "Ready…"
+    frame from flashing when the window moves to another monitor.
+  */
+  if (payload?.phase === "capture") {
+    /*
+      Always use the dedicated loading view for the first shortcut frame.
+
+      Normal Open Assistant:
+        Capturing selection… / Loading clipboard…
+
+      Quick Grammar:
+        Reading selected text… / Preparing Grammar Only.
+
+      Quick Understand:
+        Reading selected text… / Preparing Understand This.
+
+      main.js keeps the native window fully transparent until the renderer
+      confirms that this state has painted.
+    */
+    hideNotice();
+
+    setShortcutCaptureLoading(payload?.action || null, payload?.reason || null);
+
+    notifyAssistantFrameReady(payload.requestId);
+    return;
+  }
+
+  /*
+    FINAL quick-action payload.
+
+    Go directly from the already-visible shortcut loading screen into the
+    requested operation. Never route through the home screen first.
+  */
   if (payload?.action && sourceText.value.trim()) {
+    hideNotice();
     runMode(payload.action);
     return;
   }
+
+  if (payload?.action && !sourceText.value.trim()) {
+    /*
+      V7.5.8 QUICK-ACTION FAILURE UX
+
+      Never make a failed quick-action capture look like
+      the user opened the normal assistant.
+
+      Stay on the dedicated quick-action screen and explain what happened.
+      This keeps shortcut intent intact even if Windows does not return a
+      selected-text copy.
+    */
+    hideNotice();
+
+    setShortcutCaptureLoading(payload.action, "capturing");
+
+    loadingTitle.textContent = "Couldn’t capture selected text.";
+
+    if (loadingNote) {
+      const retryMessages = {
+        express: "Keep the text highlighted, then use Quick Express again.",
+        understand:
+          "Keep the text highlighted, then use Quick Understand again.",
+        client_reply:
+          "Keep the client message highlighted, then use Quick Client Reply again.",
+        grammar: "Keep the text highlighted, then use Quick Grammar again.",
+      };
+
+      loadingNote.textContent =
+        retryMessages[payload.action] ||
+        "Keep the text highlighted, then try the quick action again.";
+    }
+
+    return;
+  }
+
+  /*
+    Normal Open Assistant final state.
+  */
+  showView("main");
 
   if (!payload?.captured && currentSource === "selected") {
     showNotice(
       "No text selected",
       "Highlight text in the source app and press Ctrl+R, or enter text manually.",
     );
+
+    return;
   }
+
+  if (!payload?.captured && currentSource === "clipboard") {
+    showNotice(
+      "Clipboard is empty",
+      "Copy text in another app and press Ctrl+R, or enter text manually.",
+    );
+
+    return;
+  }
+
+  hideNotice();
 });
 
 /* =========================================================
