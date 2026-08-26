@@ -1,40 +1,42 @@
 # Clarity AI Assistant
 
-A private Windows desktop writing assistant designed to make everyday communication clearer, faster, and easier without taking control away from the user.
+**A Windows desktop AI writing assistant for clearer everyday and professional communication.**
 
-Clarity works from selected text in apps such as browsers, Facebook, Notepad, VS Code, Shopify Admin, Upwork, Gmail, and other editable Windows applications. It can improve writing, explain difficult text, help draft client replies, correct grammar, and return approved text directly to the original app.
+Clarity is a personal portfolio project built with **Electron, JavaScript, Cloudflare Workers, and the OpenAI API**. It works directly with selected text in Windows applications so users can rewrite, understand, correct, or reply to text without constantly moving content between apps.
 
 **Current version:** `1.0.5`
 
 ---
 
-## Features
+## Preview
+
+![Clarity AI Assistant](docs/images/clarity-home.png)
+
+---
+
+## What Clarity Can Do
 
 ### Express Clearly
 
-Turns rough thoughts, incomplete sentences, Taglish, or unclear English into a cleaner and more natural message while preserving the intended meaning.
+Turn rough thoughts, incomplete sentences, Taglish, or unclear English into a cleaner and more natural message while preserving the intended meaning.
+
+![Clarity Express Clearly](docs/images/clarity-express.png)
 
 ### Understand This
 
-Explains difficult messages, technical wording, client instructions, or paragraphs in simpler language.
+Break down difficult client messages, technical wording, or unfamiliar terms into a simpler explanation.
+
+![Clarity Understand This](docs/images/clarity-understand.png)
 
 ### Client Reply
 
-Helps create a professional reply from a client message.
+Turn a client message and an optional rough response into multiple professional reply options that can be reviewed and edited before sending.
 
-The reply workflow supports:
-
-- optional rough-response input;
-- Professional, Friendly, and Firm tones;
-- Short, Normal, and Detailed lengths;
-- three suggested replies;
-- editable reply output;
-- reply refinement;
-- session conversation context.
+![Clarity Client Reply](docs/images/clarity-client-reply.png)
 
 ### Grammar Only
 
-Corrects grammar with minimal rewriting so the original wording and intent stay as close as possible.
+Correct grammar, spelling, punctuation, and minor awkward wording while keeping the original structure and tone as close as possible.
 
 ### Replace Selection
 
@@ -48,6 +50,22 @@ Replace Selection is intended for editable controls such as:
 - VS Code and other editors.
 
 It cannot modify static webpage content, already-sent messages, or other read-only text.
+
+---
+
+## Tech Stack
+
+| Area                 | Technology                                |
+| -------------------- | ----------------------------------------- |
+| Desktop application  | Electron                                  |
+| Application language | JavaScript                                |
+| UI                   | HTML, CSS, JavaScript                     |
+| AI backend           | Cloudflare Workers                        |
+| AI service           | OpenAI API                                |
+| Update delivery      | Electron Updater + Cloudflare Worker + R2 |
+| Windows integration  | PowerShell + Win32 APIs                   |
+| Packaging            | Electron Builder + NSIS                   |
+| Version control      | Git + GitHub                              |
 
 ---
 
@@ -129,7 +147,7 @@ Electron desktop app
       │   Cloudflare Worker
       │   mickofy-writing-assistant
       │       ▼
-      │   AI service
+      │   OpenAI API
       │
       └── Update check
               ▼
@@ -147,9 +165,16 @@ The desktop application does not store the AI provider secret directly in render
 ## Project Structure
 
 ```text
-mickofy-writing-assistant/
+clarity-ai-assistant/
 ├─ build/
 │  └─ icon.ico
+│
+├─ docs/
+│  └─ images/
+│     ├─ clarity-home.png
+│     ├─ clarity-express.png
+│     ├─ clarity-understand.png
+│     └─ clarity-client-reply.png
 │
 ├─ src/
 │  ├─ main.js
@@ -161,10 +186,10 @@ mickofy-writing-assistant/
 │     └─ update-about.css
 │
 ├─ cloudflare/
-│  ├─ writing-assistant/
+│  ├─ mickofy-writing-assistant/
 │  │  └─ worker.js
 │  │
-│  └─ updates-gateway/
+│  └─ clarity-updates-gateway/
 │     └─ worker.js
 │
 ├─ package.json
@@ -173,10 +198,10 @@ mickofy-writing-assistant/
 └─ README.md
 ```
 
-The two Cloudflare Workers should remain separate because they serve different responsibilities:
+The two Cloudflare Workers remain separate because they serve different responsibilities:
 
-- `writing-assistant` handles writing/AI requests;
-- `updates-gateway` protects and serves the private desktop update feed.
+- `mickofy-writing-assistant` handles writing and AI requests;
+- `clarity-updates-gateway` protects and serves the desktop update feed.
 
 ---
 
@@ -218,7 +243,7 @@ CLARITY_UPDATE_TOKEN
 | ---------------------- | -------------------------------------------------------------- |
 | `WRITING_API_URL`      | URL of the writing-assistant Cloudflare Worker                 |
 | `WRITING_APP_TOKEN`    | Token used by the desktop app to authenticate writing requests |
-| `CLARITY_UPDATE_URL`   | Private update gateway URL                                     |
+| `CLARITY_UPDATE_URL`   | Update gateway URL                                             |
 | `CLARITY_UPDATE_TOKEN` | Token used to authenticate update requests                     |
 
 Do not commit production tokens or secrets to GitHub.
@@ -243,6 +268,8 @@ Recommended ignored local files include:
 ```gitignore
 .env
 .env.*
+!.env.example
+
 .dev.vars
 .dev.vars.*
 ```
@@ -283,13 +310,13 @@ dist/
 └─ latest.yml
 ```
 
-`dist/` should remain outside source control.
+`dist/` remains outside source control.
 
 ---
 
 ## Automatic Updates
 
-Clarity uses `electron-updater` with a private Cloudflare update gateway.
+Clarity uses `electron-updater` with a Cloudflare update gateway.
 
 The update flow is:
 
@@ -389,6 +416,8 @@ Clarity is built around a small Electron security boundary:
 
 Never commit `.env`, `.dev.vars`, API keys, tokens, or other credentials.
 
+The repository history was also checked with Gitleaks before being made public.
+
 ---
 
 ## Git
@@ -416,7 +445,7 @@ git diff --cached
 Then commit and push:
 
 ```powershell
-git commit -m "Release 1.0.5 with capture and update fixes"
+git commit -m "Describe the change"
 git push
 ```
 
@@ -473,4 +502,4 @@ confirm normal keyboard state afterward
 
 **Micko**
 
-Clarity AI Assistant is a private desktop productivity project focused on clearer professional communication and practical Windows-native workflows.
+Clarity AI Assistant is a personal desktop productivity project focused on clearer professional communication and practical Windows-native workflows.
