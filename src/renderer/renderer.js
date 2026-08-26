@@ -219,6 +219,38 @@ function showView(name) {
   }
 }
 
+/*
+  REPLACE SELECTION BACKGROUND PREP
+
+  Replace Selection intentionally paints a neutral view before the main
+  process hides Clarity and returns focus to the original source app.
+
+  These helpers were referenced by the Replace Selection click handler but
+  were accidentally missing from renderer.js. That caused a ReferenceError
+  before the IPC call could run, making the button appear to do nothing.
+*/
+function prepareWindowForBackground() {
+  hideNotice();
+
+  if (loadingTitle) {
+    loadingTitle.textContent = "Replacing selected text…";
+  }
+
+  if (loadingNote) {
+    loadingNote.textContent = "Returning the result to your source app.";
+  }
+
+  showView("loading");
+}
+
+function waitForUiPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(resolve);
+    });
+  });
+}
+
 function showNotice(title, message) {
   noticeTitle.textContent = title;
   noticeMessage.textContent = message;

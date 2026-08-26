@@ -700,10 +700,6 @@ const captureHelperPending = new Map();
 const CAPTURE_HELPER_START_TIMEOUT_MS = 7000;
 const CAPTURE_HELPER_REQUEST_TIMEOUT_MS = 2000;
 
-function encodePowerShellCommand(script) {
-  return Buffer.from(String(script), "utf16le").toString("base64");
-}
-
 function rejectCaptureHelperPending(error) {
   for (const [id, pending] of captureHelperPending.entries()) {
     clearTimeout(pending.timer);
@@ -788,6 +784,9 @@ using System;
 using System.Runtime.InteropServices;
 
 public static class ClarityPersistentCapture {
+  private const uint INPUT_KEYBOARD = 1;
+  private const uint KEYEVENTF_KEYUP = 0x0002;
+
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
 
@@ -795,10 +794,78 @@ public static class ClarityPersistentCapture {
   public static extern bool SetForegroundWindow(IntPtr hWnd);
 
   [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
   public static extern uint GetClipboardSequenceNumber();
 
   [DllImport("user32.dll")]
   public static extern short GetAsyncKeyState(int vKey);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint SendInput(
+    uint nInputs,
+    INPUT[] pInputs,
+    int cbSize
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)]
+    public MOUSEINPUT mi;
+
+    [FieldOffset(0)]
+    public KEYBDINPUT ki;
+
+    [FieldOffset(0)]
+    public HARDWAREINPUT hi;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct HARDWAREINPUT {
+    public uint uMsg;
+    public ushort wParamL;
+    public ushort wParamH;
+  }
+
+  public static bool SendVirtualKey(int virtualKey, bool keyUp) {
+    INPUT[] inputs = new INPUT[1];
+
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].U.ki.wVk = (ushort)virtualKey;
+    inputs[0].U.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+
+    return SendInput(
+      1,
+      inputs,
+      Marshal.SizeOf(typeof(INPUT))
+    ) == 1;
+  }
 }
 "@;
 
@@ -850,6 +917,19 @@ function Test-ClarityKeysReleased {
   return $true;
 }
 
+function Test-ClarityKeyDown {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Int32]$KeyCode
+  );
+
+  return (
+    ([ClarityPersistentCapture]::GetAsyncKeyState(
+      [Int32]$KeyCode
+    ) -band 0x8000) -ne 0
+  );
+}
+
 [Console]::Out.WriteLine('READY');
 [Console]::Out.Flush();
 
@@ -872,6 +952,14 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
 
     $requestId = [Int64]$request.id;
     $selfHwnd = [Int64]$request.selfHwnd;
+    $fallbackTargetHwnd = 0;
+
+    try {
+      $fallbackTargetHwnd = [Int64]$request.fallbackTargetHwnd;
+    }
+    catch {
+      $fallbackTargetHwnd = 0;
+    }
 
     $shortcutKeyCodes = @();
 
@@ -896,6 +984,27 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     $targetHwnd =
       [ClarityPersistentCapture]::GetForegroundWindow().ToInt64();
 
+    $usedFallbackTarget = $false;
+
+    # If the shortcut is pressed while Clarity itself is foreground, use the
+    # last known external source window instead of failing immediately.
+    #
+    # This matters for the Ctrl+Alt action cluster: after one Clarity action
+    # opens the assistant, the user can keep Ctrl+Alt held and tap another
+    # action key without first clicking back into the source app.
+    if (
+      $selfHwnd -gt 0 -and
+      $targetHwnd -eq $selfHwnd -and
+      $fallbackTargetHwnd -gt 0 -and
+      $fallbackTargetHwnd -ne $selfHwnd -and
+      [ClarityPersistentCapture]::IsWindow(
+        [IntPtr]$fallbackTargetHwnd
+      )
+    ) {
+      $targetHwnd = $fallbackTargetHwnd;
+      $usedFallbackTarget = $true;
+    }
+
     if (
       $targetHwnd -le 0 -or
       ($selfHwnd -gt 0 -and $targetHwnd -eq $selfHwnd)
@@ -906,6 +1015,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         ok = $false
         reason = 'no-source-window'
         clipboardChanged = $false
+        usedFallbackTarget = [bool]$usedFallbackTarget
       } | Out-Null;
 
       continue;
@@ -919,21 +1029,26 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     ) | Out-Null;
 
     # ----------------------------------------------------------
-    # V7.5.9 SHORTCUT-AWARE PRE-COPY WAIT
+    # V7.6.4 MODIFIER-HOLD-AWARE PRE-COPY WAIT
     #
-    # The global shortcut itself is configurable in Settings.
+    # Clarity's shortcuts intentionally form a Ctrl + Alt + action-key
+    # cluster. Users may naturally keep Ctrl + Alt held while tapping
+    # W / E / R / T.
     #
-    # Do not hardcode Quick Grammar / Quick Understand keys here. Electron
-    # sends the current accelerator's Windows virtual-key codes with every
-    # capture request.
+    # Waiting for the ENTIRE shortcut chord to be released made that workflow
+    # fail with "shortcut-still-held". Instead:
     #
-    # 1. Wait for the source window to actually be foreground.
-    # 2. Wait until the COMPLETE trigger chord is physically released.
-    #    Example: Ctrl + Shift + R means Ctrl, Shift, AND R must all be UP.
-    # 3. Require two consecutive all-up checks (~5ms stable) before Ctrl+C.
+    # 1. Wait only for the non-modifier trigger key(s) to be released.
+    # 2. Detect any modifier keys that are still physically held.
+    # 3. Temporarily send key-up for those held modifiers.
+    # 4. Send the proven Ctrl+C capture.
+    # 5. Immediately restore the held modifiers with synthetic key-down.
     #
-    # The 500ms release ceiling is only a maximum. Normal quick releases
-    # continue immediately.
+    # This prevents Ctrl+C from accidentally becoming Ctrl+Alt+C,
+    # Ctrl+Shift+C, etc., while allowing the user to keep Ctrl + Alt held.
+    #
+    # The 500ms ceiling now applies only to the action key itself, not to
+    # Ctrl / Alt / Shift / Windows modifiers.
     # ----------------------------------------------------------
 
     $focusTimer =
@@ -961,16 +1076,56 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         110
       );
 
-    # If no shortcut key codes were understood for any reason, preserve
-    # the old reliable behavior by falling back to the generic modifier set.
+    # Modifier virtual keys that may be present in an Electron accelerator.
+    $acceleratorModifierKeyCodes = @(
+      0x10, # Shift
+      0x11, # Ctrl
+      0x12, # Alt
+      0x5B, # Left Windows
+      0x5C  # Right Windows
+    );
+
+    # Side-specific physical modifier keys. Preserving the actual side keeps
+    # the user's held-key state as faithful as possible after Ctrl+C.
+    $physicalModifierKeyCodes = @(
+      0xA2, # Left Ctrl
+      0xA3, # Right Ctrl
+      0xA4, # Left Alt
+      0xA5, # Right Alt
+      0xA0, # Left Shift
+      0xA1, # Right Shift
+      0x5B, # Left Windows
+      0x5C  # Right Windows
+    );
+
+    # If no shortcut key codes were understood, keep a conservative fallback.
     if ($shortcutKeyCodes.Count -eq 0) {
       $shortcutKeyCodes = @(
         0x11, # Ctrl
         0x12, # Alt
-        0x10, # Shift
-        0x5B, # Left Windows
-        0x5C  # Right Windows
+        0x10  # Shift
       );
+    }
+
+    $shortcutModifierKeyCodes = @(
+      $shortcutKeyCodes |
+        Where-Object {
+          $acceleratorModifierKeyCodes -contains [Int32]$_
+        }
+    );
+
+    $shortcutTriggerKeyCodes = @(
+      $shortcutKeyCodes |
+        Where-Object {
+          $acceleratorModifierKeyCodes -notcontains [Int32]$_
+        }
+    );
+
+    # A valid Electron global shortcut normally has at least one non-modifier
+    # key. If a malformed/custom accelerator somehow does not, fall back to
+    # the previous all-key safety behavior.
+    if ($shortcutTriggerKeyCodes.Count -eq 0) {
+      $shortcutTriggerKeyCodes = @($shortcutKeyCodes);
     }
 
     $shortcutReleaseTimer =
@@ -982,10 +1137,10 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     while (
       $shortcutReleaseTimer.ElapsedMilliseconds -lt 500
     ) {
-      $allReleased =
-        Test-ClarityKeysReleased -KeyCodes $shortcutKeyCodes;
+      $triggerReleased =
+        Test-ClarityKeysReleased -KeyCodes $shortcutTriggerKeyCodes;
 
-      if ($allReleased) {
+      if ($triggerReleased) {
         $stableReleaseChecks += 1;
 
         if ($stableReleaseChecks -ge 2) {
@@ -1006,25 +1161,23 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         500
       );
 
-    # Keep a compatibility diagnostic with the older logs.
-    # In v7.5.9 this means the complete configured shortcut was released,
-    # not merely generic modifiers.
-    $modifiersReleased = [bool]$shortcutReleased;
-
-    # If the physical shortcut is still held at the safety ceiling, do
-    # not knowingly inject Ctrl+C into an active chord. Return a deterministic
-    # capture miss instead of the previous random Windows race.
     if (-not $shortcutReleased) {
       Write-ClarityResponse @{
         id = $requestId
         hwnd = $targetHwnd
         ok = $false
-        reason = 'shortcut-still-held'
+        reason = 'shortcut-trigger-still-held'
         clipboardChanged = $false
         focusWaitMs = [Int32]$focusWaitMs
         shortcutReleaseWaitMs = [Int32]$shortcutReleaseWaitMs
         shortcutReleased = $false
         shortcutKeyCount = [Int32]$shortcutKeyCodes.Count
+        triggerKeyCount = [Int32]$shortcutTriggerKeyCodes.Count
+        modifierKeyCount = [Int32]$shortcutModifierKeyCodes.Count
+        heldModifierCount = 0
+        modifierNeutralized = $false
+        modifierRestoreOk = $true
+        usedFallbackTarget = [bool]$usedFallbackTarget
         copyWaitMs = 0
         focusReady = [bool]$focusReady
         modifiersReleased = $false
@@ -1033,7 +1186,138 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       continue;
     }
 
-    [System.Windows.Forms.SendKeys]::SendWait('^c');
+    # Identify the actual left/right modifier keys that the user is still
+    # physically holding. GetAsyncKeyState reflects the hardware state.
+    $heldModifierKeyCodes = @();
+
+    foreach ($keyCode in $physicalModifierKeyCodes) {
+      if (Test-ClarityKeyDown -KeyCode ([Int32]$keyCode)) {
+        $heldModifierKeyCodes += [Int32]$keyCode;
+      }
+    }
+
+    # On unusual keyboards/drivers, side-specific state may be unavailable.
+    # Fall back to generic Ctrl/Alt/Shift only when no side-specific key for
+    # that modifier family was detected.
+    $leftCtrlHeld =
+      ($heldModifierKeyCodes -contains 0xA2);
+    $rightCtrlHeld =
+      ($heldModifierKeyCodes -contains 0xA3);
+
+    if (
+      -not $leftCtrlHeld -and
+      -not $rightCtrlHeld -and
+      (Test-ClarityKeyDown -KeyCode 0x11)
+    ) {
+      $heldModifierKeyCodes += 0x11;
+    }
+
+    $leftAltHeld =
+      ($heldModifierKeyCodes -contains 0xA4);
+    $rightAltHeld =
+      ($heldModifierKeyCodes -contains 0xA5);
+
+    if (
+      -not $leftAltHeld -and
+      -not $rightAltHeld -and
+      (Test-ClarityKeyDown -KeyCode 0x12)
+    ) {
+      $heldModifierKeyCodes += 0x12;
+    }
+
+    $leftShiftHeld =
+      ($heldModifierKeyCodes -contains 0xA0);
+    $rightShiftHeld =
+      ($heldModifierKeyCodes -contains 0xA1);
+
+    if (
+      -not $leftShiftHeld -and
+      -not $rightShiftHeld -and
+      (Test-ClarityKeyDown -KeyCode 0x10)
+    ) {
+      $heldModifierKeyCodes += 0x10;
+    }
+
+    $modifierNeutralized = $true;
+    $modifierRestoreOk = $true;
+
+    # Temporarily neutralize physically-held modifiers before the old proven
+    # SendKeys Ctrl+C path. Normal quick-tap users with no held modifiers take
+    # exactly the same copy path as before.
+    foreach ($keyCode in $heldModifierKeyCodes) {
+      $released =
+        [ClarityPersistentCapture]::SendVirtualKey(
+          [Int32]$keyCode,
+          $true
+        );
+
+      if (-not $released) {
+        $modifierNeutralized = $false;
+        break;
+      }
+    }
+
+    if (-not $modifierNeutralized) {
+      # Best-effort restore for any modifiers already released.
+      foreach ($keyCode in $heldModifierKeyCodes) {
+        [ClarityPersistentCapture]::SendVirtualKey(
+          [Int32]$keyCode,
+          $false
+        ) | Out-Null;
+      }
+
+      Write-ClarityResponse @{
+        id = $requestId
+        hwnd = $targetHwnd
+        ok = $false
+        reason = 'modifier-neutralize-failed'
+        clipboardChanged = $false
+        focusWaitMs = [Int32]$focusWaitMs
+        shortcutReleaseWaitMs = [Int32]$shortcutReleaseWaitMs
+        shortcutReleased = $true
+        shortcutKeyCount = [Int32]$shortcutKeyCodes.Count
+        triggerKeyCount = [Int32]$shortcutTriggerKeyCodes.Count
+        modifierKeyCount = [Int32]$shortcutModifierKeyCodes.Count
+        heldModifierCount = [Int32]$heldModifierKeyCodes.Count
+        modifierNeutralized = $false
+        modifierRestoreOk = $true
+        usedFallbackTarget = [bool]$usedFallbackTarget
+        copyWaitMs = 0
+        focusReady = [bool]$focusReady
+        modifiersReleased = ($heldModifierKeyCodes.Count -eq 0)
+      } | Out-Null;
+
+      continue;
+    }
+
+    if ($heldModifierKeyCodes.Count -gt 0) {
+      Start-Sleep -Milliseconds 8;
+    }
+
+    try {
+      [System.Windows.Forms.SendKeys]::SendWait('^c');
+    }
+    finally {
+      # Restore held modifiers immediately so Ctrl+Alt can remain held for
+      # another Clarity action key.
+      foreach ($keyCode in $heldModifierKeyCodes) {
+        $restored =
+          [ClarityPersistentCapture]::SendVirtualKey(
+            [Int32]$keyCode,
+            $false
+          );
+
+        if (-not $restored) {
+          $modifierRestoreOk = $false;
+        }
+      }
+    }
+
+    # Compatibility diagnostic: true only when the user was not physically
+    # holding modifiers at copy time. Held modifiers are now supported rather
+    # than treated as a capture failure.
+    $modifiersReleased =
+      ($heldModifierKeyCodes.Count -eq 0);
 
     # ----------------------------------------------------------
     # V7.5.8 RELIABLE ADAPTIVE COPY WAIT
@@ -1095,6 +1379,12 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       shortcutReleaseWaitMs = [Int32]$shortcutReleaseWaitMs
       shortcutReleased = [bool]$shortcutReleased
       shortcutKeyCount = [Int32]$shortcutKeyCodes.Count
+      triggerKeyCount = [Int32]$shortcutTriggerKeyCodes.Count
+      modifierKeyCount = [Int32]$shortcutModifierKeyCodes.Count
+      heldModifierCount = [Int32]$heldModifierKeyCodes.Count
+      modifierNeutralized = [bool]$modifierNeutralized
+      modifierRestoreOk = [bool]$modifierRestoreOk
+      usedFallbackTarget = [bool]$usedFallbackTarget
       copyWaitMs = [Int32]$copyWaitMs
       focusReady = [bool]$focusReady
       modifiersReleased = [bool]$modifiersReleased
@@ -1112,6 +1402,47 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
 }
 `;
 
+  /*
+    V7.6.5 PERSISTENT HELPER LAUNCH
+
+    Do not pass this helper through PowerShell -EncodedCommand.
+
+    Windows CreateProcess has a command-line length limit. After the
+    modifier-hold-aware capture logic was added, the Base64-encoded UTF-16
+    helper exceeded that limit and Node failed before PowerShell could start
+    with:
+
+      spawn ENAMETOOLONG
+
+    Launch the exact same persistent helper from a temporary .ps1 file
+    instead. Its stdin/stdout remain dedicated to Clarity's request protocol,
+    so the fast warmed-helper architecture is preserved.
+  */
+  const helperScriptPath = path.join(
+    app.getPath("temp"),
+    `clarity-capture-helper-${process.pid}-${Date.now()}.ps1`,
+  );
+
+  try {
+    fs.writeFileSync(helperScriptPath, helperScript, "utf8");
+  } catch (error) {
+    console.warn("Could not write persistent capture helper script:", error);
+    return Promise.resolve(false);
+  }
+
+  const cleanupHelperScript = () => {
+    try {
+      fs.unlinkSync(helperScriptPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        console.warn(
+          "Could not remove persistent capture helper script:",
+          error?.message || error,
+        );
+      }
+    }
+  };
+
   captureHelperStartPromise = new Promise((resolve) => {
     const child = spawn(
       "powershell.exe",
@@ -1120,12 +1451,14 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         "-NoProfile",
         "-Sta",
         "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
         "-OutputFormat",
         "Text",
         "-WindowStyle",
         "Hidden",
-        "-EncodedCommand",
-        encodePowerShellCommand(helperScript),
+        "-File",
+        helperScriptPath,
       ],
       {
         windowsHide: true,
@@ -1229,10 +1562,12 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       }
 
       rejectCaptureHelperPending(error);
+      cleanupHelperScript();
       finishStart(false);
     });
 
     child.on("exit", (code, signal) => {
+      cleanupHelperScript();
       const wasCurrent = child === captureHelperProcess;
 
       if (wasCurrent) {
@@ -1403,6 +1738,12 @@ async function captureSelectedTextWithPersistentHelper(
     shortcutReleaseWaitMs: null,
     shortcutReleased: null,
     shortcutKeyCount: null,
+    triggerKeyCount: null,
+    modifierKeyCount: null,
+    heldModifierCount: null,
+    modifierNeutralized: null,
+    modifierRestoreOk: null,
+    usedFallbackTarget: null,
     copyWaitMs: null,
     focusReady: null,
     modifiersReleased: null,
@@ -1430,6 +1771,11 @@ async function captureSelectedTextWithPersistentHelper(
   const child = captureHelperProcess;
   const id = ++captureHelperRequestId;
   const selfHwnd = getNativeWindowHandle() || 0;
+  const fallbackTargetHwnd =
+    Number.isFinite(Number(lastExternalWindowHandle)) &&
+    Number(lastExternalWindowHandle) > 0
+      ? Number(lastExternalWindowHandle)
+      : 0;
 
   const shortcutKeyCodes = acceleratorToWindowsVirtualKeys(shortcutAccelerator);
 
@@ -1437,6 +1783,7 @@ async function captureSelectedTextWithPersistentHelper(
     JSON.stringify({
       id,
       selfHwnd,
+      fallbackTargetHwnd,
       shortcutAccelerator,
       shortcutKeyCodes,
     }),
@@ -1503,6 +1850,35 @@ async function captureSelectedTextWithPersistentHelper(
       ? Number(payload.shortcutKeyCount)
       : null;
 
+    timing.triggerKeyCount = Number.isFinite(Number(payload?.triggerKeyCount))
+      ? Number(payload.triggerKeyCount)
+      : null;
+
+    timing.modifierKeyCount = Number.isFinite(Number(payload?.modifierKeyCount))
+      ? Number(payload.modifierKeyCount)
+      : null;
+
+    timing.heldModifierCount = Number.isFinite(
+      Number(payload?.heldModifierCount),
+    )
+      ? Number(payload.heldModifierCount)
+      : null;
+
+    timing.modifierNeutralized =
+      typeof payload?.modifierNeutralized === "boolean"
+        ? payload.modifierNeutralized
+        : null;
+
+    timing.modifierRestoreOk =
+      typeof payload?.modifierRestoreOk === "boolean"
+        ? payload.modifierRestoreOk
+        : null;
+
+    timing.usedFallbackTarget =
+      typeof payload?.usedFallbackTarget === "boolean"
+        ? payload.usedFallbackTarget
+        : null;
+
     timing.copyWaitMs = Number.isFinite(Number(payload?.copyWaitMs))
       ? Number(payload.copyWaitMs)
       : null;
@@ -1567,9 +1943,11 @@ async function captureSelectedTextWithPersistentHelper(
       ? "selection"
       : payload?.reason === "no-source-window"
         ? "no-source-window"
-        : payload?.reason === "shortcut-still-held"
-          ? "shortcut-still-held"
-          : "no-selection",
+        : payload?.reason === "shortcut-trigger-still-held"
+          ? "shortcut-trigger-still-held"
+          : payload?.reason === "modifier-neutralize-failed"
+            ? "modifier-neutralize-failed"
+            : "no-selection",
     targetHwnd: resolvedTargetHwnd,
     timing,
   };
@@ -1857,7 +2235,10 @@ if ($copied -and $copied -ne $marker -and $copied.Trim().Length -gt 0) {
   Existing Ctrl+R refresh continues using the existing
   UI Automation + fallback flow below.
 */
-async function captureSelectedTextFromForegroundOneShot() {
+async function captureSelectedTextFromForegroundOneShot(
+  shortcutAccelerator = "",
+  fallbackTargetHwnd = 0,
+) {
   if (process.platform !== "win32") {
     return {
       ok: false,
@@ -1868,6 +2249,18 @@ async function captureSelectedTextFromForegroundOneShot() {
   }
 
   const selfHwnd = getNativeWindowHandle() || 0;
+
+  const resolvedFallbackTargetHwnd =
+    Number.isFinite(Number(fallbackTargetHwnd)) &&
+    Number(fallbackTargetHwnd) > 0
+      ? Number(fallbackTargetHwnd)
+      : 0;
+
+  const shortcutKeyCodes = acceleratorToWindowsVirtualKeys(shortcutAccelerator);
+
+  const shortcutKeyCodesPs = shortcutKeyCodes.length
+    ? shortcutKeyCodes.join(",")
+    : "0x11,0x12,0x10";
 
   const marker = `__CLARITY_SELECTION_${Date.now()}_${Math.random()
     .toString(36)
@@ -1881,11 +2274,89 @@ using System;
 using System.Runtime.InteropServices;
 
 public static class ClarityForegroundCapture {
+  private const uint INPUT_KEYBOARD = 1;
+  private const uint KEYEVENTF_KEYUP = 0x0002;
+
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
 
   [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern short GetAsyncKeyState(int vKey);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint SendInput(
+    uint nInputs,
+    INPUT[] pInputs,
+    int cbSize
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)]
+    public MOUSEINPUT mi;
+
+    [FieldOffset(0)]
+    public KEYBDINPUT ki;
+
+    [FieldOffset(0)]
+    public HARDWAREINPUT hi;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct HARDWAREINPUT {
+    public uint uMsg;
+    public ushort wParamL;
+    public ushort wParamH;
+  }
+
+  public static bool IsKeyDown(int virtualKey) {
+    return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+  }
+
+  public static bool SendVirtualKey(int virtualKey, bool keyUp) {
+    INPUT[] inputs = new INPUT[1];
+
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].U.ki.wVk = (ushort)virtualKey;
+    inputs[0].U.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+
+    return SendInput(
+      1,
+      inputs,
+      Marshal.SizeOf(typeof(INPUT))
+    ) == 1;
+  }
 }
 "@;
 
@@ -1893,6 +2364,21 @@ Add-Type -AssemblyName System.Windows.Forms;
 
 $targetHwnd = [ClarityForegroundCapture]::GetForegroundWindow().ToInt64();
 $selfHwnd = [Int64]${selfHwnd};
+$fallbackTargetHwnd = [Int64]${resolvedFallbackTargetHwnd};
+$usedFallbackTarget = $false;
+
+if (
+  $selfHwnd -gt 0 -and
+  $targetHwnd -eq $selfHwnd -and
+  $fallbackTargetHwnd -gt 0 -and
+  $fallbackTargetHwnd -ne $selfHwnd -and
+  [ClarityForegroundCapture]::IsWindow(
+    [IntPtr]$fallbackTargetHwnd
+  )
+) {
+  $targetHwnd = $fallbackTargetHwnd;
+  $usedFallbackTarget = $true;
+}
 
 $marker = [System.Text.Encoding]::UTF8.GetString(
   [Convert]::FromBase64String('${markerBase64}')
@@ -1907,6 +2393,7 @@ if (
     ok = $false
     reason = 'no-source-window'
     text = ''
+    usedFallbackTarget = [bool]$usedFallbackTarget
   } | ConvertTo-Json -Compress;
 
   $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($payload);
@@ -1930,7 +2417,100 @@ try {
 
   Start-Sleep -Milliseconds 110;
 
-  [System.Windows.Forms.SendKeys]::SendWait('^c');
+  $shortcutKeyCodes = @(${shortcutKeyCodesPs});
+
+  $acceleratorModifierKeyCodes = @(
+    0x10, 0x11, 0x12, 0x5B, 0x5C
+  );
+
+  $triggerKeyCodes = @(
+    $shortcutKeyCodes |
+      Where-Object {
+        $acceleratorModifierKeyCodes -notcontains [Int32]$_
+      }
+  );
+
+  if ($triggerKeyCodes.Count -eq 0) {
+    $triggerKeyCodes = @($shortcutKeyCodes);
+  }
+
+  # Wait for only the action key(s), not held Ctrl/Alt modifiers.
+  $releaseTimer =
+    [System.Diagnostics.Stopwatch]::StartNew();
+
+  $triggerReleased = $false;
+  $stableReleaseChecks = 0;
+
+  while ($releaseTimer.ElapsedMilliseconds -lt 500) {
+    $allUp = $true;
+
+    foreach ($keyCode in $triggerKeyCodes) {
+      if ([ClarityForegroundCapture]::IsKeyDown([Int32]$keyCode)) {
+        $allUp = $false;
+        break;
+      }
+    }
+
+    if ($allUp) {
+      $stableReleaseChecks += 1;
+
+      if ($stableReleaseChecks -ge 2) {
+        $triggerReleased = $true;
+        break;
+      }
+    }
+    else {
+      $stableReleaseChecks = 0;
+    }
+
+    Start-Sleep -Milliseconds 5;
+  }
+
+  if (-not $triggerReleased) {
+    throw 'shortcut-trigger-still-held';
+  }
+
+  $physicalModifierKeyCodes = @(
+    0xA2, 0xA3, # Ctrl
+    0xA4, 0xA5, # Alt
+    0xA0, 0xA1, # Shift
+    0x5B, 0x5C  # Windows
+  );
+
+  $heldModifierKeyCodes = @();
+
+  foreach ($keyCode in $physicalModifierKeyCodes) {
+    if ([ClarityForegroundCapture]::IsKeyDown([Int32]$keyCode)) {
+      $heldModifierKeyCodes += [Int32]$keyCode;
+    }
+  }
+
+  foreach ($keyCode in $heldModifierKeyCodes) {
+    if (
+      -not [ClarityForegroundCapture]::SendVirtualKey(
+        [Int32]$keyCode,
+        $true
+      )
+    ) {
+      throw 'modifier-neutralize-failed';
+    }
+  }
+
+  if ($heldModifierKeyCodes.Count -gt 0) {
+    Start-Sleep -Milliseconds 8;
+  }
+
+  try {
+    [System.Windows.Forms.SendKeys]::SendWait('^c');
+  }
+  finally {
+    foreach ($keyCode in $heldModifierKeyCodes) {
+      [ClarityForegroundCapture]::SendVirtualKey(
+        [Int32]$keyCode,
+        $false
+      ) | Out-Null;
+    }
+  }
 
   Start-Sleep -Milliseconds 180;
 
@@ -1975,6 +2555,7 @@ $payload = @{
   ok = [bool]$ok
   reason = $reason
   text = $encodedText
+  usedFallbackTarget = [bool]$usedFallbackTarget
 } | ConvertTo-Json -Compress;
 
 $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($payload);
@@ -2019,6 +2600,10 @@ $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($payload);
             ? "selection"
             : "no-selection",
       targetHwnd: resolvedTargetHwnd,
+      usedFallbackTarget:
+        typeof payload?.usedFallbackTarget === "boolean"
+          ? payload.usedFallbackTarget
+          : false,
     };
   } catch (error) {
     console.warn("Foreground selected-text capture failed:", error);
@@ -2060,6 +2645,12 @@ async function captureSelectedTextFromForeground(shortcutAccelerator = "") {
         shortcutReleaseWaitMs: result.timing?.shortcutReleaseWaitMs ?? null,
         shortcutReleased: result.timing?.shortcutReleased ?? null,
         shortcutKeyCount: result.timing?.shortcutKeyCount ?? null,
+        triggerKeyCount: result.timing?.triggerKeyCount ?? null,
+        modifierKeyCount: result.timing?.modifierKeyCount ?? null,
+        heldModifierCount: result.timing?.heldModifierCount ?? null,
+        modifierNeutralized: result.timing?.modifierNeutralized ?? null,
+        modifierRestoreOk: result.timing?.modifierRestoreOk ?? null,
+        usedFallbackTarget: result.timing?.usedFallbackTarget ?? null,
         copyWaitMs: result.timing?.copyWaitMs ?? null,
         focusReady: result.timing?.focusReady ?? null,
         modifiersReleased: result.timing?.modifiersReleased ?? null,
@@ -2079,7 +2670,10 @@ async function captureSelectedTextFromForeground(shortcutAccelerator = "") {
 
     const fallbackStarted = Date.now();
 
-    const result = await captureSelectedTextFromForegroundOneShot();
+    const result = await captureSelectedTextFromForegroundOneShot(
+      shortcutAccelerator,
+      lastExternalWindowHandle,
+    );
 
     console.log(
       "[CLARITY CAPTURE PERF]",
@@ -2090,6 +2684,7 @@ async function captureSelectedTextFromForeground(shortcutAccelerator = "") {
         totalMs: Date.now() - started,
         ok: result.ok,
         reason: result.reason,
+        usedFallbackTarget: result.usedFallbackTarget ?? false,
       }),
     );
 
@@ -2132,9 +2727,9 @@ async function refreshSelectedText() {
 }
 
 async function replaceSelection(text) {
-  const value = typeof text === "string" ? text.trim() : "";
+  const value = typeof text === "string" ? text : "";
 
-  if (!value) {
+  if (!value.trim()) {
     return { ok: false, error: "There is no result to replace." };
   }
 
@@ -2145,24 +2740,246 @@ async function replaceSelection(text) {
     };
   }
 
+  const targetHwnd = Number(lastExternalWindowHandle);
+
+  if (!Number.isFinite(targetHwnd) || targetHwnd <= 0) {
+    return {
+      ok: false,
+      error: "The source window is no longer available. Use Copy instead.",
+    };
+  }
+
   const valueBase64 = Buffer.from(value, "utf8").toString("base64");
 
+  /*
+    RELIABLE WINDOWS REPLACE-SELECTION
+
+    The older path used WinForms SendKeys and restored the clipboard only
+    200ms later. Chromium/Electron editors can process paste asynchronously,
+    so the clipboard could be restored before the source app consumed it.
+    SetForegroundWindow can also fail transiently when focus moves between
+    Clarity and another process.
+
+    This replacement path:
+    - hides Clarity first;
+    - robustly reactivates the exact captured source HWND;
+    - waits until the source really owns foreground focus;
+    - waits for Ctrl/Alt/Shift to be physically released;
+    - sends Ctrl+V with native SendInput;
+    - leaves the replacement text on the clipboard long enough for rich
+      Chromium/Electron editors to consume the paste;
+    - restores the user's original clipboard afterward.
+
+    This only changes Replace Selection. The proven selected-text capture
+    helper and shortcut/window opening paths remain untouched.
+  */
   const script = `
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
+
 public static class ClarityPasteTarget {
+  private const int SW_RESTORE = 9;
+  private const uint INPUT_KEYBOARD = 1;
+  private const uint KEYEVENTF_KEYUP = 0x0002;
+
   [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  public static extern bool BringWindowToTop(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsIconic(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(
+    IntPtr hWnd,
+    IntPtr lpdwProcessId
+  );
+
+  [DllImport("kernel32.dll")]
+  public static extern uint GetCurrentThreadId();
+
+  [DllImport("user32.dll")]
+  public static extern bool AttachThreadInput(
+    uint idAttach,
+    uint idAttachTo,
+    bool fAttach
+  );
+
+  [DllImport("user32.dll")]
+  public static extern short GetAsyncKeyState(int vKey);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint SendInput(
+    uint nInputs,
+    INPUT[] pInputs,
+    int cbSize
+  );
+
+  /*
+    Win32 INPUT uses a union whose largest member is MOUSEINPUT.
+
+    On 64-bit Windows the native INPUT structure is 40 bytes. Defining only
+    KEYBDINPUT makes the managed structure too small (32 bytes), causing
+    SendInput() to fail with ERROR_INVALID_PARAMETER.
+
+    Include every native union member so Marshal.SizeOf(INPUT) matches the
+    Win32 ABI on both x86 and x64.
+  */
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)]
+    public MOUSEINPUT mi;
+
+    [FieldOffset(0)]
+    public KEYBDINPUT ki;
+
+    [FieldOffset(0)]
+    public HARDWAREINPUT hi;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct HARDWAREINPUT {
+    public uint uMsg;
+    public ushort wParamL;
+    public ushort wParamH;
+  }
+
+  public static bool IsKeyDown(int virtualKey) {
+    return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+  }
+
+  public static bool Activate(IntPtr hWnd) {
+    if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) {
+      return false;
+    }
+
+    IntPtr foreground = GetForegroundWindow();
+
+    uint currentThread = GetCurrentThreadId();
+    uint foregroundThread =
+      foreground == IntPtr.Zero
+        ? 0
+        : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+    uint targetThread =
+      GetWindowThreadProcessId(hWnd, IntPtr.Zero);
+
+    bool attachedForeground = false;
+    bool attachedTarget = false;
+
+    try {
+      if (foregroundThread != 0 && foregroundThread != currentThread) {
+        attachedForeground =
+          AttachThreadInput(currentThread, foregroundThread, true);
+      }
+
+      if (targetThread != 0 && targetThread != currentThread) {
+        attachedTarget =
+          AttachThreadInput(currentThread, targetThread, true);
+      }
+
+      /*
+        Preserve the source window's current size/state.
+
+        SW_RESTORE on a maximized browser restores it to its normal window
+        bounds, which made Chrome/Edge/Facebook appear to "shrink" after
+        Replace Selection. Only restore when the source is actually minimized.
+        Maximized and normal windows are left in their existing state.
+      */
+      if (IsIconic(hWnd)) {
+        ShowWindowAsync(hWnd, SW_RESTORE);
+      }
+
+      BringWindowToTop(hWnd);
+      SetForegroundWindow(hWnd);
+
+      return GetForegroundWindow() == hWnd;
+    }
+    finally {
+      if (attachedTarget) {
+        AttachThreadInput(currentThread, targetThread, false);
+      }
+
+      if (attachedForeground) {
+        AttachThreadInput(currentThread, foregroundThread, false);
+      }
+    }
+  }
+
+  public static bool SendCtrlV() {
+    INPUT[] inputs = new INPUT[4];
+
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].U.ki.wVk = 0x11;
+
+    inputs[1].type = INPUT_KEYBOARD;
+    inputs[1].U.ki.wVk = 0x56;
+
+    inputs[2].type = INPUT_KEYBOARD;
+    inputs[2].U.ki.wVk = 0x56;
+    inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+
+    inputs[3].type = INPUT_KEYBOARD;
+    inputs[3].U.ki.wVk = 0x11;
+    inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+
+    uint sent = SendInput(
+      (uint)inputs.Length,
+      inputs,
+      Marshal.SizeOf(typeof(INPUT))
+    );
+
+    return sent == (uint)inputs.Length;
+  }
 }
 "@;
+
 Add-Type -AssemblyName System.Windows.Forms;
 
 $value = [System.Text.Encoding]::UTF8.GetString(
   [Convert]::FromBase64String('${valueBase64}')
 );
 
+$target = [IntPtr]${targetHwnd};
 $snapshot = $null;
+$activated = $false;
+$sent = $false;
 $success = $false;
 
 try {
@@ -2172,16 +2989,47 @@ try {
 
   [System.Windows.Forms.Clipboard]::SetText($value);
 
-  $activated = [ClarityPasteTarget]::SetForegroundWindow(
-    [IntPtr]${lastExternalWindowHandle}
+  # Focus restoration can be transient across Chromium/Electron windows.
+  # Retry briefly and require Windows to report the exact source HWND as
+  # foreground before sending the paste.
+  $focusDeadline = [DateTime]::UtcNow.AddMilliseconds(700);
+
+  do {
+    $activated = [ClarityPasteTarget]::Activate($target);
+
+    if (-not $activated) {
+      Start-Sleep -Milliseconds 25;
+    }
+  } while (
+    -not $activated -and
+    [DateTime]::UtcNow -lt $focusDeadline
   );
 
-  Start-Sleep -Milliseconds 110;
-
   if ($activated) {
-    [System.Windows.Forms.SendKeys]::SendWait('^v');
-    Start-Sleep -Milliseconds 200;
-    $success = $true;
+    # Avoid combining Ctrl+V with a modifier the user may still be releasing.
+    $releaseDeadline = [DateTime]::UtcNow.AddMilliseconds(400);
+
+    while (
+      (
+        [ClarityPasteTarget]::IsKeyDown(0x11) -or
+        [ClarityPasteTarget]::IsKeyDown(0x12) -or
+        [ClarityPasteTarget]::IsKeyDown(0x10)
+      ) -and
+      [DateTime]::UtcNow -lt $releaseDeadline
+    ) {
+      Start-Sleep -Milliseconds 10;
+    }
+
+    Start-Sleep -Milliseconds 60;
+
+    $sent = [ClarityPasteTarget]::SendCtrlV();
+
+    if ($sent) {
+      # Rich Chromium/Electron editors may consume clipboard data
+      # asynchronously after receiving the keyboard event.
+      Start-Sleep -Milliseconds 700;
+      $success = $true;
+    }
   }
 }
 finally {
@@ -2196,25 +3044,58 @@ finally {
 
 if ($success) {
   'OK'
+} elseif (-not $activated) {
+  'FAIL_FOCUS'
+} elseif (-not $sent) {
+  $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error();
+  $inputSize = [Runtime.InteropServices.Marshal]::SizeOf(
+    [type][ClarityPasteTarget+INPUT]
+  );
+  "FAIL_SEND|ERROR=$lastError|INPUT_SIZE=$inputSize"
+} else {
+  'FAIL_UNKNOWN'
 }
 `;
 
+  /*
+    Let Windows fully remove Clarity from the foreground before the helper
+    attempts to reactivate the original source application.
+  */
   mainWindow?.hide();
-  await delay(80);
+  await delay(120);
 
   try {
-    const output = await runPowerShell(script, 5000);
+    const output = (await runPowerShell(script, 6500)).trim();
 
-    if (output.trim() === "OK") {
+    console.log(
+      "[CLARITY REPLACE]",
+      JSON.stringify({
+        result: output || "NO_OUTPUT",
+        targetHwnd,
+      }),
+    );
+
+    if (output === "OK") {
       return { ok: true };
     }
+
+    if (output === "FAIL_FOCUS") {
+      throw new Error("Could not return focus to the source window.");
+    }
+
+    if (output.startsWith("FAIL_SEND")) {
+      throw new Error(
+        `Windows did not accept the paste keyboard input. ${output}`,
+      );
+    }
   } catch (error) {
-    console.warn("Replace selection failed:", error);
+    console.warn("Replace selection failed:", error?.message || error);
   }
 
   if (mainWindow) {
     placeWindow();
     mainWindow.show();
+    mainWindow.setAlwaysOnTop(true);
     mainWindow.focus();
   }
 
