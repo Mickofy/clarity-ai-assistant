@@ -2726,7 +2726,953 @@ async function refreshSelectedText() {
   return fallbackResult;
 }
 
+/*
+  CLARITY PERSISTENT PASTE HELPER V1
+
+  Replace Selection previously launched a brand-new PowerShell process for
+  every paste and kept the IPC request open during a fixed 700ms clipboard
+  safety delay.
+
+  The fast path below deliberately does NOT modify the proven selected-text
+  capture helper.
+
+  Architecture:
+  - Electron snapshots the user's clipboard.
+  - Electron writes the replacement text.
+  - Clarity hides immediately.
+  - A dedicated, already-warmed PowerShell STA helper activates the exact
+    source HWND and injects native Ctrl+V with SendInput.
+  - The helper reports success as soon as the paste keyboard input is sent.
+  - Electron restores the original clipboard ~700ms later, outside the
+    user-facing Replace Selection critical path.
+  - If the persistent helper fails, the original one-shot implementation below
+    is used as a fallback.
+
+  This preserves the longer clipboard-consumption window needed by rich
+  Chromium/Electron editors without making the user wait for it.
+*/
+
+let pasteHelperProcess = null;
+let pasteHelperReady = false;
+let pasteHelperStartPromise = null;
+let pasteHelperRequestId = 0;
+const pasteHelperPending = new Map();
+
+const PASTE_HELPER_START_TIMEOUT_MS = 2500;
+const PASTE_HELPER_REQUEST_TIMEOUT_MS = 1500;
+const PASTE_CLIPBOARD_RESTORE_DELAY_MS = 700;
+
+let pendingReplaceClipboardRestore = null;
+
+function rejectPasteHelperPending(error) {
+  for (const [id, pending] of pasteHelperPending.entries()) {
+    pasteHelperPending.delete(id);
+    clearTimeout(pending.timer);
+
+    try {
+      pending.reject(error);
+    } catch {}
+  }
+}
+
+function stopPasteHelper() {
+  const child = pasteHelperProcess;
+
+  pasteHelperProcess = null;
+  pasteHelperReady = false;
+  pasteHelperStartPromise = null;
+
+  rejectPasteHelperPending(
+    new Error("Persistent Replace Selection helper stopped."),
+  );
+
+  if (child && !child.killed) {
+    try {
+      child.kill();
+    } catch {}
+  }
+}
+
+function handlePasteHelperResponseLine(line) {
+  let payload;
+
+  try {
+    const json = Buffer.from(String(line || ""), "base64").toString("utf8");
+    payload = JSON.parse(json);
+  } catch {
+    return;
+  }
+
+  const id = Number(payload?.id);
+
+  if (!Number.isFinite(id)) {
+    return;
+  }
+
+  const pending = pasteHelperPending.get(id);
+
+  if (!pending) {
+    return;
+  }
+
+  pasteHelperPending.delete(id);
+  clearTimeout(pending.timer);
+  pending.resolve(payload);
+}
+
+function startPasteHelper() {
+  if (process.platform !== "win32") {
+    return Promise.resolve(false);
+  }
+
+  if (pasteHelperProcess && !pasteHelperProcess.killed && pasteHelperReady) {
+    return Promise.resolve(true);
+  }
+
+  if (pasteHelperStartPromise) {
+    return pasteHelperStartPromise;
+  }
+
+  const helperScript = String.raw`
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class ClarityPersistentPaste {
+  private const int SW_RESTORE = 9;
+  private const uint INPUT_KEYBOARD = 1;
+  private const uint KEYEVENTF_KEYUP = 0x0002;
+
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  public static extern bool BringWindowToTop(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsIconic(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(
+    IntPtr hWnd,
+    IntPtr lpdwProcessId
+  );
+
+  [DllImport("kernel32.dll")]
+  public static extern uint GetCurrentThreadId();
+
+  [DllImport("user32.dll")]
+  public static extern bool AttachThreadInput(
+    uint idAttach,
+    uint idAttachTo,
+    bool fAttach
+  );
+
+  [DllImport("user32.dll")]
+  public static extern short GetAsyncKeyState(int vKey);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint SendInput(
+    uint nInputs,
+    INPUT[] pInputs,
+    int cbSize
+  );
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)]
+    public MOUSEINPUT mi;
+
+    [FieldOffset(0)]
+    public KEYBDINPUT ki;
+
+    [FieldOffset(0)]
+    public HARDWAREINPUT hi;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct HARDWAREINPUT {
+    public uint uMsg;
+    public ushort wParamL;
+    public ushort wParamH;
+  }
+
+  public static bool IsKeyDown(int virtualKey) {
+    return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+  }
+
+  public static bool Activate(IntPtr hWnd) {
+    if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) {
+      return false;
+    }
+
+    IntPtr foreground = GetForegroundWindow();
+
+    uint currentThread = GetCurrentThreadId();
+    uint foregroundThread =
+      foreground == IntPtr.Zero
+        ? 0
+        : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+    uint targetThread =
+      GetWindowThreadProcessId(hWnd, IntPtr.Zero);
+
+    bool attachedForeground = false;
+    bool attachedTarget = false;
+
+    try {
+      if (foregroundThread != 0 && foregroundThread != currentThread) {
+        attachedForeground =
+          AttachThreadInput(currentThread, foregroundThread, true);
+      }
+
+      if (targetThread != 0 && targetThread != currentThread) {
+        attachedTarget =
+          AttachThreadInput(currentThread, targetThread, true);
+      }
+
+      // Preserve maximized/normal source-window state.
+      // Restore only when the source is actually minimized.
+      if (IsIconic(hWnd)) {
+        ShowWindowAsync(hWnd, SW_RESTORE);
+      }
+
+      BringWindowToTop(hWnd);
+      SetForegroundWindow(hWnd);
+
+      return GetForegroundWindow() == hWnd;
+    }
+    finally {
+      if (attachedTarget) {
+        AttachThreadInput(currentThread, targetThread, false);
+      }
+
+      if (attachedForeground) {
+        AttachThreadInput(currentThread, foregroundThread, false);
+      }
+    }
+  }
+
+  private static INPUT KeyboardInput(ushort virtualKey, bool keyUp) {
+    INPUT input = new INPUT();
+
+    input.type = INPUT_KEYBOARD;
+    input.U.ki.wVk = virtualKey;
+    input.U.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+
+    return input;
+  }
+
+  public static bool SendCleanCtrlV() {
+    /*
+      Replace Selection is triggered by a mouse click inside Clarity, not by
+      the original global shortcut. If Ctrl/Alt/Shift/Win remains logically
+      down from the capture shortcut, waiting for it proved unreliable and
+      could turn Ctrl+V into Ctrl+Alt+V or another unintended chord.
+
+      Send key-up events for every relevant left/right + generic modifier
+      immediately before Ctrl+V. Do not restore them afterward: by the time
+      the user clicks Replace Selection the original shortcut should already
+      be over, and clearing stale synthetic modifier state is exactly what we
+      want.
+    */
+    ushort[] releaseKeys = new ushort[] {
+      0xA2, // Left Ctrl
+      0xA3, // Right Ctrl
+      0xA4, // Left Alt
+      0xA5, // Right Alt
+      0xA0, // Left Shift
+      0xA1, // Right Shift
+      0x5B, // Left Windows
+      0x5C, // Right Windows
+      0x11, // Generic Ctrl
+      0x12, // Generic Alt
+      0x10  // Generic Shift
+    };
+
+    INPUT[] inputs = new INPUT[releaseKeys.Length + 4];
+    int index = 0;
+
+    foreach (ushort key in releaseKeys) {
+      inputs[index++] = KeyboardInput(key, true);
+    }
+
+    inputs[index++] = KeyboardInput(0x11, false); // Ctrl down
+    inputs[index++] = KeyboardInput(0x56, false); // V down
+    inputs[index++] = KeyboardInput(0x56, true);  // V up
+    inputs[index++] = KeyboardInput(0x11, true);  // Ctrl up
+
+    uint sent = SendInput(
+      (uint)inputs.Length,
+      inputs,
+      Marshal.SizeOf(typeof(INPUT))
+    );
+
+    return sent == (uint)inputs.Length;
+  }
+}
+"@;
+
+function Write-ClarityPasteResponse {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Response
+  );
+
+  $json = $Response | ConvertTo-Json -Compress;
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($json);
+  $line = [Convert]::ToBase64String($bytes);
+
+  [Console]::Out.WriteLine($line);
+  [Console]::Out.Flush();
+}
+
+[Console]::Out.WriteLine('READY');
+[Console]::Out.Flush();
+
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) {
+    continue;
+  }
+
+  $requestId = 0;
+
+  try {
+    $requestBytes = [Convert]::FromBase64String($line);
+    $requestJson =
+      [System.Text.Encoding]::UTF8.GetString($requestBytes);
+    $request = $requestJson | ConvertFrom-Json;
+
+    $requestId = [Int64]$request.id;
+    $targetHwnd = [Int64]$request.targetHwnd;
+
+    if (
+      $targetHwnd -le 0 -or
+      -not [ClarityPersistentPaste]::IsWindow([IntPtr]$targetHwnd)
+    ) {
+      Write-ClarityPasteResponse @{
+        id = $requestId
+        ok = $false
+        reason = 'invalid-target'
+        focusMs = 0
+        modifierWaitMs = 0
+        sendMs = 0
+      };
+
+      continue;
+    }
+
+    # Focus adaptively. Fast machines proceed immediately; no fixed 120ms
+    # pre-focus sleep is paid on every Replace Selection.
+    $focusTimer =
+      [System.Diagnostics.Stopwatch]::StartNew();
+
+    $activated = $false;
+
+    while ($focusTimer.ElapsedMilliseconds -lt 350) {
+      $activated =
+        [ClarityPersistentPaste]::Activate(
+          [IntPtr]$targetHwnd
+        );
+
+      if ($activated) {
+        break;
+      }
+
+      Start-Sleep -Milliseconds 5;
+    }
+
+    $focusMs = [Int32]$focusTimer.ElapsedMilliseconds;
+
+    if (-not $activated) {
+      Write-ClarityPasteResponse @{
+        id = $requestId
+        ok = $false
+        reason = 'focus-failed'
+        focusMs = $focusMs
+        modifierWaitMs = 0
+        sendMs = 0
+      };
+
+      continue;
+    }
+
+    # Do not wait for modifiers here. The previous 400ms wait could hit its
+    # ceiling while Ctrl/Alt were still logically down, then send an unstable
+    # chord. SendCleanCtrlV atomically clears stale modifier state and then
+    # injects only Ctrl+V.
+    $modifierWaitMs = 0;
+
+    $sendTimer =
+      [System.Diagnostics.Stopwatch]::StartNew();
+
+    $sent = [ClarityPersistentPaste]::SendCleanCtrlV();
+
+    $sendMs =
+      [Int32]$sendTimer.ElapsedMilliseconds;
+
+    if ($sent) {
+      Write-ClarityPasteResponse @{
+        id = $requestId
+        ok = $true
+        reason = 'paste-sent'
+        focusMs = $focusMs
+        modifierWaitMs = $modifierWaitMs
+        modifierStrategy = 'clean-sendinput'
+        sendMs = $sendMs
+      };
+    }
+    else {
+      $lastError =
+        [Runtime.InteropServices.Marshal]::GetLastWin32Error();
+
+      $inputSize =
+        [Runtime.InteropServices.Marshal]::SizeOf(
+          [type][ClarityPersistentPaste+INPUT]
+        );
+
+      Write-ClarityPasteResponse @{
+        id = $requestId
+        ok = $false
+        reason = 'send-failed'
+        focusMs = $focusMs
+        modifierWaitMs = $modifierWaitMs
+        modifierStrategy = 'clean-sendinput'
+        sendMs = $sendMs
+        lastError = [Int32]$lastError
+        inputSize = [Int32]$inputSize
+      };
+    }
+  }
+  catch {
+    Write-ClarityPasteResponse @{
+      id = $requestId
+      ok = $false
+      reason = 'helper-error'
+      message = $_.Exception.Message
+      focusMs = 0
+      modifierWaitMs = 0
+      sendMs = 0
+    };
+  }
+}
+`;
+
+  const helperScriptPath = path.join(
+    app.getPath("temp"),
+    `clarity-paste-helper-${process.pid}-${Date.now()}.ps1`,
+  );
+
+  try {
+    fs.writeFileSync(helperScriptPath, helperScript, "utf8");
+  } catch (error) {
+    console.warn("Could not write persistent Replace Selection helper:", error);
+
+    return Promise.resolve(false);
+  }
+
+  const cleanupHelperScript = () => {
+    try {
+      fs.unlinkSync(helperScriptPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        console.warn(
+          "Could not remove persistent paste helper script:",
+          error?.message || error,
+        );
+      }
+    }
+  };
+
+  pasteHelperStartPromise = new Promise((resolve) => {
+    const child = spawn(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-Sta",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-OutputFormat",
+        "Text",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        helperScriptPath,
+      ],
+      {
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    pasteHelperProcess = child;
+    pasteHelperReady = false;
+
+    let stdoutBuffer = "";
+    let startSettled = false;
+
+    const finishStart = (ready) => {
+      if (startSettled) {
+        return;
+      }
+
+      startSettled = true;
+      clearTimeout(startTimer);
+
+      if (child !== pasteHelperProcess) {
+        resolve(false);
+        return;
+      }
+
+      pasteHelperReady = Boolean(ready);
+
+      if (!ready) {
+        pasteHelperStartPromise = null;
+      }
+
+      resolve(Boolean(ready));
+    };
+
+    const startTimer = setTimeout(() => {
+      console.warn(
+        "Persistent Replace Selection helper did not become ready in time.",
+      );
+
+      if (child === pasteHelperProcess) {
+        try {
+          child.kill();
+        } catch {}
+
+        pasteHelperProcess = null;
+        pasteHelperReady = false;
+        pasteHelperStartPromise = null;
+      }
+
+      finishStart(false);
+    }, PASTE_HELPER_START_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+
+    child.stdout.on("data", (chunk) => {
+      stdoutBuffer += String(chunk || "");
+
+      while (true) {
+        const newlineIndex = stdoutBuffer.indexOf("\n");
+
+        if (newlineIndex < 0) {
+          break;
+        }
+
+        const line = stdoutBuffer
+          .slice(0, newlineIndex)
+          .replace(/\r$/, "")
+          .trim();
+
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+
+        if (!line) {
+          continue;
+        }
+
+        if (line === "READY") {
+          finishStart(true);
+          continue;
+        }
+
+        handlePasteHelperResponseLine(line);
+      }
+    });
+
+    child.stderr.setEncoding("utf8");
+
+    child.stderr.on("data", (chunk) => {
+      const message = String(chunk || "").trim();
+
+      if (message && !message.startsWith("#< CLIXML")) {
+        console.warn("Persistent Replace Selection helper:", message);
+      }
+    });
+
+    child.on("error", (error) => {
+      console.warn(
+        "Could not start persistent Replace Selection helper:",
+        error,
+      );
+
+      if (child === pasteHelperProcess) {
+        pasteHelperProcess = null;
+        pasteHelperReady = false;
+        pasteHelperStartPromise = null;
+      }
+
+      rejectPasteHelperPending(error);
+      cleanupHelperScript();
+      finishStart(false);
+    });
+
+    child.on("exit", (code, signal) => {
+      cleanupHelperScript();
+
+      const wasCurrent = child === pasteHelperProcess;
+
+      if (wasCurrent) {
+        pasteHelperProcess = null;
+        pasteHelperReady = false;
+        pasteHelperStartPromise = null;
+
+        rejectPasteHelperPending(
+          new Error(
+            `Persistent Replace Selection helper exited (${code ?? "null"}/${signal ?? "none"}).`,
+          ),
+        );
+      }
+
+      if (!startSettled) {
+        finishStart(false);
+      }
+    });
+  });
+
+  return pasteHelperStartPromise;
+}
+
+async function sendPasteWithPersistentHelper(targetHwnd) {
+  const ready = await startPasteHelper();
+
+  if (
+    !ready ||
+    !pasteHelperProcess ||
+    pasteHelperProcess.killed ||
+    !pasteHelperReady
+  ) {
+    throw new Error("Persistent Replace Selection helper is unavailable.");
+  }
+
+  const child = pasteHelperProcess;
+  const id = ++pasteHelperRequestId;
+
+  const request = Buffer.from(
+    JSON.stringify({
+      id,
+      targetHwnd,
+    }),
+    "utf8",
+  ).toString("base64");
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pasteHelperPending.delete(id);
+
+      if (child === pasteHelperProcess) {
+        stopPasteHelper();
+      }
+
+      reject(new Error("Persistent Replace Selection helper timed out."));
+    }, PASTE_HELPER_REQUEST_TIMEOUT_MS);
+
+    pasteHelperPending.set(id, {
+      timer,
+      resolve,
+      reject,
+    });
+
+    child.stdin.write(`${request}\n`, "utf8", (error) => {
+      if (!error) {
+        return;
+      }
+
+      const pending = pasteHelperPending.get(id);
+
+      if (pending) {
+        pasteHelperPending.delete(id);
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+    });
+  });
+}
+
+async function acquireReplaceClipboardSnapshot() {
+  /*
+    If another fast Replace Selection happened less than 700ms ago, the
+    clipboard currently contains Clarity's temporary replacement text.
+
+    Reuse the ORIGINAL snapshot from that pending restore rather than
+    snapshotting Clarity's temporary text as if it belonged to the user.
+  */
+  if (pendingReplaceClipboardRestore) {
+    const pending = pendingReplaceClipboardRestore;
+    pendingReplaceClipboardRestore = null;
+    clearTimeout(pending.timer);
+
+    return {
+      snapshot: pending.snapshot,
+      reusedPendingSnapshot: true,
+    };
+  }
+
+  return {
+    snapshot: await snapshotClipboardForPersistentCapture(),
+    reusedPendingSnapshot: false,
+  };
+}
+
+function scheduleReplaceClipboardRestore(snapshot, temporaryText) {
+  const token = Symbol("clarity-replace-clipboard-restore");
+
+  const timer = setTimeout(async () => {
+    if (
+      !pendingReplaceClipboardRestore ||
+      pendingReplaceClipboardRestore.token !== token
+    ) {
+      return;
+    }
+
+    pendingReplaceClipboardRestore = null;
+
+    const started = Date.now();
+
+    try {
+      /*
+        Do not overwrite a NEW clipboard value the user copied during the
+        700ms paste-safety window. Restore only while Clarity's temporary
+        replacement text is still the clipboard's plain-text value.
+      */
+      const clipboardStillOwnedByReplace =
+        (await readClipboardText()) === String(temporaryText ?? "");
+
+      if (!clipboardStillOwnedByReplace) {
+        console.log(
+          "[CLARITY REPLACE CLIPBOARD]",
+          JSON.stringify({
+            restored: false,
+            reason: "clipboard-changed-by-user-or-source",
+            checkMs: Date.now() - started,
+          }),
+        );
+
+        return;
+      }
+
+      await restoreClipboardAfterPersistentCapture(snapshot);
+
+      console.log(
+        "[CLARITY REPLACE CLIPBOARD]",
+        JSON.stringify({
+          restored: true,
+          restoreMs: Date.now() - started,
+        }),
+      );
+    } catch (error) {
+      console.warn(
+        "Could not restore clipboard after Replace Selection:",
+        error?.message || error,
+      );
+    }
+  }, PASTE_CLIPBOARD_RESTORE_DELAY_MS);
+
+  timer.unref?.();
+
+  pendingReplaceClipboardRestore = {
+    token,
+    timer,
+    snapshot,
+    temporaryText: String(temporaryText ?? ""),
+  };
+}
+
+async function restoreReplaceClipboardImmediately(snapshot) {
+  try {
+    await restoreClipboardAfterPersistentCapture(snapshot);
+    return true;
+  } catch (error) {
+    console.warn(
+      "Could not restore clipboard after failed fast Replace Selection:",
+      error?.message || error,
+    );
+
+    return false;
+  }
+}
+
 async function replaceSelection(text) {
+  const started = Date.now();
+  const value = typeof text === "string" ? text : "";
+
+  if (!value.trim()) {
+    return {
+      ok: false,
+      error: "There is no result to replace.",
+    };
+  }
+
+  if (!lastExternalWindowHandle) {
+    return {
+      ok: false,
+      error: "The source window is no longer available. Use Copy instead.",
+    };
+  }
+
+  const targetHwnd = Number(lastExternalWindowHandle);
+
+  if (!Number.isFinite(targetHwnd) || targetHwnd <= 0) {
+    return {
+      ok: false,
+      error: "The source window is no longer available. Use Copy instead.",
+    };
+  }
+
+  const perf = {
+    path: "persistent-helper",
+    snapshotMs: 0,
+    reusedPendingSnapshot: false,
+    clipboardWriteMs: 0,
+    helperMs: 0,
+    focusMs: null,
+    modifierWaitMs: null,
+    modifierStrategy: null,
+    sendMs: null,
+    totalMs: 0,
+  };
+
+  let clipboardSnapshot = null;
+  let temporaryClipboardWritten = false;
+
+  try {
+    const snapshotStarted = Date.now();
+    const acquired = await acquireReplaceClipboardSnapshot();
+
+    clipboardSnapshot = acquired.snapshot;
+    perf.reusedPendingSnapshot = Boolean(acquired.reusedPendingSnapshot);
+    perf.snapshotMs = Date.now() - snapshotStarted;
+
+    const writeStarted = Date.now();
+
+    const clipboardWritten = await writeClipboardText(value);
+
+    perf.clipboardWriteMs = Date.now() - writeStarted;
+
+    if (!clipboardWritten) {
+      throw new Error("Could not place the replacement text on the clipboard.");
+    }
+
+    temporaryClipboardWritten = true;
+
+    /*
+      No fixed 120ms hide delay.
+
+      The persistent helper below checks the actual foreground HWND and
+      adaptively retries only when Windows needs more time.
+    */
+    mainWindow?.hide();
+
+    const helperStarted = Date.now();
+    const result = await sendPasteWithPersistentHelper(targetHwnd);
+
+    perf.helperMs = Date.now() - helperStarted;
+    perf.focusMs = Number.isFinite(Number(result?.focusMs))
+      ? Number(result.focusMs)
+      : null;
+    perf.modifierWaitMs = Number.isFinite(Number(result?.modifierWaitMs))
+      ? Number(result.modifierWaitMs)
+      : null;
+    perf.modifierStrategy =
+      typeof result?.modifierStrategy === "string"
+        ? result.modifierStrategy
+        : null;
+    perf.sendMs = Number.isFinite(Number(result?.sendMs))
+      ? Number(result.sendMs)
+      : null;
+
+    if (!result?.ok) {
+      throw new Error(
+        `Persistent helper did not paste (${result?.reason || "unknown"}).`,
+      );
+    }
+
+    /*
+      Keep the 700ms clipboard reliability window, but move it completely
+      outside the awaited/user-facing path.
+    */
+    scheduleReplaceClipboardRestore(clipboardSnapshot, value);
+    clipboardSnapshot = null;
+
+    perf.totalMs = Date.now() - started;
+
+    console.log("[CLARITY REPLACE PERF]", JSON.stringify(perf));
+
+    return { ok: true };
+  } catch (error) {
+    console.warn(
+      "Fast Replace Selection failed; using proven fallback:",
+      error?.message || error,
+    );
+
+    /*
+      The fallback must see the user's real clipboard, not the temporary
+      replacement clipboard from the failed fast attempt.
+    */
+    if (temporaryClipboardWritten && clipboardSnapshot) {
+      await restoreReplaceClipboardImmediately(clipboardSnapshot);
+    }
+
+    const fallbackStarted = Date.now();
+    const fallback = await replaceSelectionOneShotFallback(value);
+
+    console.log(
+      "[CLARITY REPLACE PERF]",
+      JSON.stringify({
+        path: "one-shot-fallback",
+        fastAttemptMs: fallbackStarted - started,
+        fallbackMs: Date.now() - fallbackStarted,
+        totalMs: Date.now() - started,
+        ok: Boolean(fallback?.ok),
+      }),
+    );
+
+    /*
+      The old fallback restores Clarity itself if it fails.
+      On success it intentionally leaves Clarity hidden.
+    */
+    return fallback;
+  }
+}
+async function replaceSelectionOneShotFallback(text) {
   const value = typeof text === "string" ? text : "";
 
   if (!value.trim()) {
@@ -3871,6 +4817,23 @@ if (gotSingleInstanceLock) {
         console.warn("Could not warm persistent capture helper:", error);
       });
 
+    /*
+      Warm the dedicated Replace Selection paste helper in the background.
+      It is intentionally separate from the selected-text capture helper.
+    */
+    startPasteHelper()
+      .then((ready) => {
+        if (ready) {
+          console.log("Persistent Replace Selection helper is ready.");
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          "Could not warm persistent Replace Selection helper:",
+          error,
+        );
+      });
+
     createWindow();
 
     let registration = registerCurrentShortcuts(settings);
@@ -4013,6 +4976,7 @@ if (gotSingleInstanceLock) {
 
 app.on("will-quit", () => {
   stopAutoUpdaterTimers();
+  stopPasteHelper();
   stopCaptureHelper();
   globalShortcut.unregisterAll();
 });

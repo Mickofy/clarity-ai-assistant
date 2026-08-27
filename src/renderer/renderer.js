@@ -253,14 +253,6 @@ function prepareWindowForBackground() {
   showView("loading");
 }
 
-function waitForUiPaint() {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(resolve);
-    });
-  });
-}
-
 function showNotice(title, message) {
   noticeTitle.textContent = title;
   noticeMessage.textContent = message;
@@ -2088,12 +2080,13 @@ replaceSuggestionBtn.addEventListener("click", async () => {
   }
 
   /*
-    replaceSelection() hides Clarity from the main process so Windows can
-    focus the source application and paste into it. Paint a neutral screen
-    first so the next shortcut never restores this old result frame.
+    Update the renderer state before Clarity hides, but do not wait two
+    animation frames for this neutral view to physically paint.
+
+    The main process now uses a warmed paste helper and adaptively confirms
+    source-window focus.
   */
   prepareWindowForBackground();
-  await waitForUiPaint();
 
   const result = await window.writingAssistant.replaceSelection(text);
 
