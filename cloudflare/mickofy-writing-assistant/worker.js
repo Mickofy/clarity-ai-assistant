@@ -118,6 +118,114 @@ If the user's intended response is too ambiguous to safely infer,
 set needsClarification to true and ask one concise question.
 `,
 
+  client_reply_options: `
+The user wants three possible replies to another person's message.
+
+Use:
+- the latest client message
+- recent conversation context
+- any rough response, intent, or factual details supplied by the user
+- the requested tone, length, and variation instructions
+
+Your first job is to decide whether the user's available information is
+sufficient to answer the client's ACTUAL question truthfully.
+
+Be intelligent and flexible.
+
+IMPORTANT DISTINCTION:
+
+REQUIRED INFORMATION:
+Facts or decisions that are necessary to answer what the client actually asked.
+
+OPTIONAL ENRICHMENT:
+Extra details that could make the reply stronger but are not required, such as:
+- exact dates
+- exact number of days
+- exact metrics or percentages
+- detailed technical causes
+- extra tools or implementation details
+- additional outcomes
+- precise timelines
+- extra examples
+
+Never block reply generation merely because OPTIONAL ENRICHMENT is missing.
+
+Prefer generating a truthful, slightly general reply over asking another
+clarification question when the user's rough notes already support a useful answer.
+
+Ask for clarification ONLY when:
+- answering the client's actual question would otherwise require inventing an important fact
+- a real user decision is required before a reply can be written
+- the user's notes are so incomplete that the core request cannot be answered truthfully
+
+Examples:
+
+Client asks:
+"Tell us about a project where your timeline slipped. What happened, and what did you do about it?"
+
+User notes:
+"Dermaestha. unexpected bugs. adjusted timeline and tried different approaches to fix it."
+
+This is ENOUGH.
+Do not ask how many extra days it took.
+Do not ask for exact dates.
+Do not require a quantified result.
+Create the replies from the facts supplied and keep any unknown outcome general.
+
+If the user's notes say an issue was being worked on, do not invent that it was
+fully resolved. Preserve what is known and what is still uncertain.
+
+Client asks:
+"What is your availability next week?"
+
+User provides no availability at all.
+
+This is NOT enough because the reply requires a real user decision.
+Ask for the minimum necessary availability information.
+
+Client asks:
+"What would you charge for this project?"
+
+User gives no price, range, or pricing direction.
+
+This is NOT enough because a price would have to be invented.
+Ask for the minimum pricing information needed.
+
+When clarification is genuinely necessary:
+- set needsClarification to true
+- ask ONE concise clarification question
+- request only the minimum missing information
+- populate placeholderExample with one short, clearly generic example showing
+  the shape of rough notes the user could enter
+- the placeholderExample must start with "e.g."
+- use generic placeholders such as "Project X", "Mon–Thu", or "$X–$Y"
+- never put invented personal facts, real project names, employers, clients,
+  claimed experience, prices, dates, or commitments into the placeholder
+- return an empty replies array
+
+Do not ask follow-up questions for facts that the client did not request unless
+those facts are genuinely necessary to avoid fabrication.
+
+If there is enough information:
+- set needsClarification to false
+- set clarificationQuestion to an empty string
+- set placeholderExample to an empty string
+- create exactly three distinct replies
+- keep the same facts and intended meaning across all three
+- preserve uncertainty and incomplete status when present
+- follow the requested tone, length, and variation instructions
+- make every reply natural and ready to send
+- make the three replies meaningfully different in phrasing and delivery
+- return only the actual reply text inside the replies array
+- do not add labels, analysis, explanations, quotation marks, or notes inside replies
+
+Do not ask for clarification merely because the user's writing is rough,
+informal, Taglish, Tagalog, fragmented, short, or grammatically incorrect.
+
+Rough notes are enough when they contain the core facts needed to answer the
+client's actual question.
+`,
+
   grammar: `
 Correct the user's writing conservatively.
 
@@ -201,6 +309,29 @@ const SCHEMAS = {
     ],
   },
 
+  client_reply_options: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      needsClarification: { type: "boolean" },
+      clarificationQuestion: { type: "string" },
+      placeholderExample: { type: "string" },
+      replies: {
+        type: "array",
+        maxItems: 3,
+        items: {
+          type: "string",
+        },
+      },
+    },
+    required: [
+      "needsClarification",
+      "clarificationQuestion",
+      "placeholderExample",
+      "replies",
+    ],
+  },
+
   grammar: {
     type: "object",
     additionalProperties: false,
@@ -253,7 +384,7 @@ export default {
       return json({
         ok: true,
         service: "Clarity AI Assistant API",
-        version: "0.2.2",
+        version: "0.2.5",
       });
     }
 
@@ -348,7 +479,15 @@ ${explanationInstruction}
 
     let input = text;
 
-    if (mode === "client_reply" && context) {
+    if (
+      (mode === "client_reply" || mode === "client_reply_options") &&
+      context
+    ) {
+      const responseLabel =
+        mode === "client_reply_options"
+          ? "THE USER'S ROUGH RESPONSE / INTENT OR DRAFT INSTRUCTION"
+          : "THE USER'S ROUGH RESPONSE";
+
       input = `
 CLIENT / CONVERSATION CONTEXT:
 
@@ -356,7 +495,7 @@ CLIENT / CONVERSATION CONTEXT:
 ${context}
 </context>
 
-THE USER'S ROUGH RESPONSE:
+${responseLabel}:
 
 <rough_response>
 ${text}

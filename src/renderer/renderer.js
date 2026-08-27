@@ -60,17 +60,24 @@ const conversationCount = document.getElementById("conversationCount");
 const clearConversationBtn = document.getElementById("clearConversationBtn");
 
 /*
-  CLIENT REPLY UX V2
+  CLIENT REPLY UX V3
 
   Keep the existing HTML as a progressive fallback, then enhance it from
-  renderer.js. This lets the feature evolve without touching the stable
-  shortcut/capture architecture or preload bridge.
+  renderer.js. The initial three-reply generation now uses one structured
+  backend request and can return a clarification question when important
+  user-specific facts are missing.
 */
 const clientReplyView = views.clientReply;
 const clientReplyHeading = clientReplyView?.querySelector(".client-heading");
 const clientReplyContextCard = clientContext?.closest(".compact-card");
 const clientReplyInputCard = roughReply?.closest(".reply-card");
 const clientReplyComposeActions = createReplyBtn?.closest(".result-actions");
+
+const CLIENT_REPLY_DEFAULT_PLACEHOLDER =
+  "Optional — type your intent, key points, or rough notes. Leave blank and Clarity can draft when enough information is available.";
+
+const CLIENT_REPLY_DEFAULT_HELPER =
+  "OPTIONAL · English, Taglish, Tagalog, fragments, or rough notes are okay.";
 
 let clientReplyStage = "compose";
 let clientReplyTone = "professional";
@@ -82,6 +89,9 @@ let clientReplyHistoryExpanded = false;
 let clientReplyPreferences = null;
 let clientReplyHistoryPanel = null;
 let clientReplyHistoryToggle = null;
+let clientReplyClarificationCard = null;
+let clientReplyClarificationQuestion = null;
+let clientReplyInputHelper = null;
 let clientReplySuggestionsPanel = null;
 let clientReplySuggestionsList = null;
 let clientReplyEditorPanel = null;
@@ -532,14 +542,13 @@ function initializeClientReplyUi() {
     roughLabel.textContent = "WHAT DO YOU WANT TO SAY?";
   }
 
-  roughReply.placeholder =
-    "Optional — type your intent, key points, or a rough response. Leave blank and Clarity will draft from the client message.";
+  roughReply.placeholder = CLIENT_REPLY_DEFAULT_PLACEHOLDER;
 
-  const roughHelper = document.createElement("div");
-  roughHelper.className = "client-reply-helper";
-  roughHelper.textContent = "OPTIONAL · English, Taglish, or Tagalog is okay.";
+  clientReplyInputHelper = document.createElement("div");
+  clientReplyInputHelper.className = "client-reply-helper";
+  clientReplyInputHelper.textContent = CLIENT_REPLY_DEFAULT_HELPER;
 
-  roughReply.insertAdjacentElement("afterend", roughHelper);
+  roughReply.insertAdjacentElement("afterend", clientReplyInputHelper);
 
   clientReplyPreferences = document.createElement("section");
   clientReplyPreferences.className = "client-reply-preferences";
@@ -589,6 +598,28 @@ function initializeClientReplyUi() {
   clearConversationBtn.insertAdjacentElement(
     "beforebegin",
     clientReplyHistoryToggle,
+  );
+
+  clientReplyClarificationCard = document.createElement("section");
+  clientReplyClarificationCard.className =
+    "result-card client-clarification-card hidden";
+
+  clientReplyClarificationCard.innerHTML = `
+    <div class="card-label">MORE CONTEXT NEEDED</div>
+
+    <div
+      class="card-text"
+      id="clientReplyClarificationQuestion"
+    ></div>
+  `;
+
+  clientReplyInputCard.insertAdjacentElement(
+    "beforebegin",
+    clientReplyClarificationCard,
+  );
+
+  clientReplyClarificationQuestion = clientReplyClarificationCard.querySelector(
+    "#clientReplyClarificationQuestion",
   );
 
   clientReplySuggestionsPanel = document.createElement("section");
@@ -796,6 +827,76 @@ function updateClientReplyPreferenceUi() {
     });
 }
 
+function resetClientReplyFieldGuidance() {
+  if (roughReply) {
+    roughReply.placeholder = CLIENT_REPLY_DEFAULT_PLACEHOLDER;
+  }
+
+  if (clientReplyInputHelper) {
+    clientReplyInputHelper.textContent = CLIENT_REPLY_DEFAULT_HELPER;
+  }
+
+  if (createReplyBtn) {
+    createReplyBtn.textContent = "CREATE 3 REPLIES";
+  }
+}
+
+function hideClientReplyClarification({ resetGuidance = true } = {}) {
+  if (clientReplyClarificationCard) {
+    clientReplyClarificationCard.classList.add("hidden");
+  }
+
+  if (clientReplyClarificationQuestion) {
+    clientReplyClarificationQuestion.textContent = "";
+  }
+
+  if (resetGuidance) {
+    resetClientReplyFieldGuidance();
+  }
+}
+
+function showClientReplyClarification({
+  question = "",
+  placeholderExample = "",
+} = {}) {
+  if (!clientReplyClarificationCard) {
+    return;
+  }
+
+  if (clientReplyClarificationQuestion) {
+    clientReplyClarificationQuestion.textContent =
+      String(question || "").trim() ||
+      "Add the missing information so Clarity does not have to guess.";
+  }
+
+  const example =
+    typeof placeholderExample === "string" ? placeholderExample.trim() : "";
+
+  if (roughReply) {
+    roughReply.placeholder =
+      example && /^e\.g\./i.test(example)
+        ? example
+        : example
+          ? `e.g. ${example}`
+          : "Add the missing information here — rough notes are enough.";
+  }
+
+  if (clientReplyInputHelper) {
+    clientReplyInputHelper.textContent =
+      "OPTIONAL · English, Taglish, Tagalog, fragments, or rough notes are okay.";
+  }
+
+  if (createReplyBtn) {
+    createReplyBtn.textContent = "CREATE REPLIES WITH THESE DETAILS";
+  }
+
+  clientReplyClarificationCard.classList.remove("hidden");
+
+  requestAnimationFrame(() => {
+    roughReply?.focus();
+  });
+}
+
 function clientReplyLatestMessage() {
   return pendingClientContext || sourceText.value.trim();
 }
@@ -892,6 +993,7 @@ function setClientReplyStage(stage) {
 
   if (!composing) {
     clientReplyHistoryPanel?.classList.add("hidden");
+    clientReplyClarificationCard?.classList.add("hidden");
   } else {
     renderClientReplyContext();
   }
@@ -922,6 +1024,7 @@ function openClientReplyComposer(clientMessage) {
 
   roughReply.value = "";
 
+  hideClientReplyClarification();
   renderClientReplyContext();
   updateClientReplyPreferenceUi();
 
@@ -1049,7 +1152,39 @@ function buildClientReplyAiContext({
   return `${baseContext}\n\n${instructions}`.trim();
 }
 
-function clientReplyRequestText(profile = null) {
+function buildClientReplyOptionsAiContext(profiles) {
+  const latest = clientReplyLatestMessage();
+  const baseContext = buildConversationContext(latest);
+
+  const variationInstructions = profiles
+    .map(
+      (profile, index) =>
+        `${index + 1}. ${profile.label}: ${profile.directive}`,
+    )
+    .join("\n");
+
+  return [
+    baseContext,
+    "",
+    "CLIENT REPLY PREFERENCES:",
+    `Base tone: ${clientReplyToneLabel()}`,
+    `Length: ${clientReplyLengthLabel()}`,
+    "",
+    "CREATE THESE THREE VARIATIONS:",
+    variationInstructions,
+    "",
+    "IMPORTANT:",
+    "- All three replies must preserve the same facts and user intent.",
+    "- Make the wording and delivery meaningfully different.",
+    "- Never invent facts, experience, deadlines, prices, availability, promises, approvals, work status, or completed work.",
+    "- Ask for clarification only when the client's actual question cannot be answered truthfully without an important missing fact or real user decision.",
+    "- Do not block generation for optional enrichment such as exact dates, exact durations, metrics, extra technical detail, or extra outcomes unless the client explicitly requires them.",
+    "- If the user's rough notes support a truthful but slightly general answer, generate the replies instead of asking another question.",
+    "- Preserve uncertainty or ongoing status rather than inventing a completed outcome.",
+  ].join("\n");
+}
+
+function clientReplyRequestText() {
   const rough = clientReplyOriginalIntent.trim();
 
   if (rough) {
@@ -1059,40 +1194,16 @@ function clientReplyRequestText(profile = null) {
   /*
     CLIENT REPLY BLANK-INTENT FALLBACK
 
-    The current backend was originally designed to rewrite a user's rough
-    response. When the textarea is intentionally blank, sending only a generic
-    instruction can be treated as the text to rewrite instead of as a request
-    to draft a reply.
-
-    Put the actual client message + drafting instructions directly inside the
-    `text` field as well as the normal `context` field. This makes blank-intent
-    generation explicit even with the existing backend contract.
+    The initial options mode can draft from the client message when the user
+    intentionally leaves the rough-response field blank. The actual client
+    message and conversation are also supplied in the context field.
   */
-  const latest = clientReplyLatestMessage();
-  const conversation = buildConversationContext(latest);
-
   return [
     "DRAFT MODE — the user has NOT written a rough reply.",
-    "Write the actual message the user can send to the client.",
-    "Do not rewrite or repeat these instructions.",
-    "",
-    conversation,
-    "",
-    "REPLY PREFERENCES:",
-    `Tone: ${clientReplyToneLabel()}`,
-    `Length: ${clientReplyLengthLabel()}`,
-    profile?.directive ? `Variation: ${profile.directive}` : "",
-    "",
-    "RULES:",
-    "- Respond to the latest client message.",
-    "- Use recent conversation only as supporting context.",
-    "- Keep the reply useful even when the user's exact intent is unknown.",
-    "- Prefer a safe acknowledgement or clarification when a factual commitment cannot be inferred.",
-    "- Do not invent prices, deadlines, availability, completed work, approvals, or promises.",
-    "- Return only the client-ready reply. No labels, notes, analysis, or quotation marks.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "Create reply options from the client message and conversation context.",
+    "Do not treat these instructions as the message to rewrite.",
+    "If a meaningful answer requires missing user-specific facts or a real decision, request clarification instead of inventing them.",
+  ].join("\n");
 }
 
 function normalizeClientReplyResult(response) {
@@ -1112,34 +1223,6 @@ function setClientReplyLoading(title, note) {
   }
 
   showView("loading");
-}
-
-async function requestClientReplyVariation(profile) {
-  const response = await window.writingAssistant.improveText({
-    text: clientReplyRequestText(profile),
-    context: buildClientReplyAiContext({
-      variationDirective: profile.directive,
-      taskDirective:
-        "Create one distinct reply option. Keep the same facts and intent, but make this option meaningfully different in phrasing and delivery from other variants.",
-    }),
-    mode: "client_reply",
-    explanationLanguage: currentSettings.understandExplanation,
-  });
-
-  if (!response?.ok) {
-    throw new Error(response?.error || "Could not create a client reply.");
-  }
-
-  const text = normalizeClientReplyResult(response);
-
-  if (!text) {
-    throw new Error("The writing service returned an empty reply.");
-  }
-
-  return {
-    ...profile,
-    text,
-  };
 }
 
 function renderClientReplySuggestions() {
@@ -1214,53 +1297,87 @@ async function generateClientReplySuggestions() {
 
   const profiles = clientReplyVariationProfiles();
 
-  const settled = await Promise.allSettled(
-    profiles.map((profile) => requestClientReplyVariation(profile)),
-  );
-
-  settled.forEach((result, index) => {
-    if (result.status === "rejected") {
-      console.warn(
-        "[CLARITY CLIENT REPLY]",
-        `Option ${index + 1} failed:`,
-        result.reason?.message || result.reason,
-      );
-    }
+  const response = await window.writingAssistant.improveText({
+    text: clientReplyRequestText(),
+    context: buildClientReplyOptionsAiContext(profiles),
+    mode: "client_reply_options",
+    explanationLanguage: currentSettings.understandExplanation,
   });
 
-  const unique = [];
-  const seen = new Set();
-
-  for (const result of settled) {
-    if (result.status !== "fulfilled") {
-      continue;
-    }
-
-    const key = result.value.text.replace(/\s+/g, " ").trim().toLowerCase();
-
-    if (!key || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    unique.push(result.value);
-  }
-
-  if (!unique.length) {
+  if (!response?.ok) {
     showView("clientReply");
     setClientReplyStage("compose");
 
-    const firstError = settled.find((result) => result.status === "rejected");
-
     showNotice(
       "Could not create reply options",
-      firstError?.reason?.message || "Try again in a moment.",
+      response?.error || "Try again in a moment.",
     );
 
     return;
   }
 
-  clientReplySuggestions = unique.slice(0, 3);
+  const result = response.result || {};
+
+  if (result.needsClarification) {
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    showClientReplyClarification({
+      question:
+        result.clarificationQuestion ||
+        "Add the missing information so Clarity does not have to guess.",
+      placeholderExample: result.placeholderExample,
+    });
+
+    return;
+  }
+
+  hideClientReplyClarification();
+
+  const replies = Array.isArray(result.replies) ? result.replies : [];
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const reply of replies) {
+    if (typeof reply !== "string") {
+      continue;
+    }
+
+    const text = reply.trim();
+
+    if (!text) {
+      continue;
+    }
+
+    const key = text.replace(/\s+/g, " ").toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(text);
+  }
+
+  if (unique.length < 3) {
+    hideClientReplyClarification();
+
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    showNotice(
+      "Could not create all 3 reply options",
+      "The writing service returned fewer than 3 distinct replies. Try again.",
+    );
+
+    return;
+  }
+
+  clientReplySuggestions = unique.slice(0, 3).map((text, index) => ({
+    ...profiles[index],
+    text,
+  }));
 
   renderClientReplySuggestions();
 
@@ -1717,6 +1834,7 @@ function commitConversationReply(finalText) {
   clientReplyOriginalIntent = "";
   clientReplySuggestions = [];
   clientReplyHistoryExpanded = false;
+  hideClientReplyClarification();
 
   updateConversationCount();
 }
