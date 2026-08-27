@@ -4,7 +4,7 @@
 
 Clarity is a personal portfolio project built with **Electron, JavaScript, Cloudflare Workers, and the OpenAI API**. It works directly with selected text in Windows applications so users can rewrite, understand, correct, or reply to text without constantly moving content between apps.
 
-**Current version:** `1.0.5`
+**Current version:** `1.0.6`
 
 ---
 
@@ -305,8 +305,8 @@ Expected release artifacts include:
 
 ```text
 dist/
-├─ Clarity AI Assistant Setup 1.0.5.exe
-├─ Clarity AI Assistant Setup 1.0.5.exe.blockmap
+├─ Clarity AI Assistant Setup 1.0.6.exe
+├─ Clarity AI Assistant Setup 1.0.6.exe.blockmap
 └─ latest.yml
 ```
 
@@ -379,7 +379,7 @@ git add .
 git status
 git diff --cached
 
-git commit -m "Release 1.0.5"
+git commit -m "Release 1.0.6"
 git push
 
 npm run build
@@ -451,9 +451,9 @@ git push
 
 ---
 
-## Current v1.0.5 Highlights
+## Current v1.0.6 Highlights
 
-Version `1.0.5` includes major reliability and workflow improvements, including:
+Version `1.0.6` includes major reliability and workflow improvements, including:
 
 - five customizable global shortcuts;
 - Quick Express;
