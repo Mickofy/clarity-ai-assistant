@@ -13,7 +13,6 @@ const { Blob } = require("buffer");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { autoUpdater } = require("electron-updater");
 
 let mainWindow = null;
 let lastExternalWindowHandle = null;
@@ -40,20 +39,6 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 const WRITING_API_URL = (process.env.WRITING_API_URL || "").replace(/\/+$/, "");
 const WRITING_APP_TOKEN = process.env.WRITING_APP_TOKEN || "";
-
-const CLARITY_UPDATE_URL = (process.env.CLARITY_UPDATE_URL || "").replace(
-  /\/+$/,
-  "",
-);
-const CLARITY_UPDATE_TOKEN = process.env.CLARITY_UPDATE_TOKEN || "";
-
-const UPDATE_CHECK_DELAY_MS = 7000;
-const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
-
-let updaterConfigured = false;
-let updateCheckTimeout = null;
-let updateCheckInterval = null;
-let updateReadyInfo = null;
 
 const WINDOW_WIDTH = 860;
 const WINDOW_HEIGHT = 760;
@@ -4451,237 +4436,6 @@ function registerCurrentShortcuts(candidateSettings) {
   return { ok: true };
 }
 
-function canUseAutoUpdater() {
-  return (
-    app.isPackaged &&
-    Boolean(CLARITY_UPDATE_URL) &&
-    Boolean(CLARITY_UPDATE_TOKEN)
-  );
-}
-
-function sanitizeUpdaterError(error) {
-  if (!error) return "Unknown updater error.";
-
-  const message =
-    typeof error?.message === "string" ? error.message : String(error);
-
-  /*
-    Never print the update token if a lower-level library ever includes
-    request details in an error message.
-  */
-  if (!CLARITY_UPDATE_TOKEN) {
-    return message;
-  }
-
-  return message.split(CLARITY_UPDATE_TOKEN).join("[REDACTED]");
-}
-
-async function showUpdateReadyUi(info) {
-  updateReadyInfo = {
-    version:
-      typeof info?.version === "string" && info.version.trim()
-        ? info.version.trim()
-        : null,
-  };
-
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    createWindow();
-  }
-
-  await waitForRendererReady();
-
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-
-  placeWindow();
-
-  try {
-    mainWindow.setOpacity(1);
-  } catch {}
-
-  mainWindow.show();
-  mainWindow.setAlwaysOnTop(true);
-  mainWindow.focus();
-
-  mainWindow.webContents.send("update-ready", {
-    version: updateReadyInfo.version || app.getVersion(),
-  });
-}
-
-function installDownloadedUpdate() {
-  if (!updateReadyInfo) {
-    return {
-      ok: false,
-      error: "No downloaded update is ready to install.",
-    };
-  }
-
-  /*
-    Return to the renderer first, then let electron-updater quit Clarity
-    and launch the NSIS installer on the next turn of the event loop.
-  */
-  setImmediate(() => {
-    try {
-      autoUpdater.quitAndInstall(false, true);
-    } catch (error) {
-      console.warn(
-        "Could not restart Clarity for update:",
-        sanitizeUpdaterError(error),
-      );
-    }
-  });
-
-  return { ok: true };
-}
-
-function configureAutoUpdater() {
-  if (updaterConfigured) {
-    return canUseAutoUpdater();
-  }
-
-  updaterConfigured = true;
-
-  /*
-    Never run the updater during `npm start`.
-    electron-updater is intended to update the packaged NSIS application.
-  */
-  if (!app.isPackaged) {
-    console.log("Auto-update disabled in development mode.");
-    return false;
-  }
-
-  if (!CLARITY_UPDATE_URL) {
-    console.warn("Auto-update disabled: CLARITY_UPDATE_URL is not configured.");
-    return false;
-  }
-
-  if (!CLARITY_UPDATE_TOKEN) {
-    console.warn(
-      "Auto-update disabled: CLARITY_UPDATE_TOKEN is not configured.",
-    );
-    return false;
-  }
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.allowDowngrade = false;
-
-  /*
-    The R2 bucket remains private. Every updater request goes through the
-    authenticated Cloudflare Worker gateway.
-  */
-  autoUpdater.requestHeaders = {
-    Authorization: `Bearer ${CLARITY_UPDATE_TOKEN}`,
-    "Cache-Control": "no-cache",
-  };
-
-  autoUpdater.setFeedURL({
-    provider: "generic",
-    url: CLARITY_UPDATE_URL,
-  });
-
-  autoUpdater.on("checking-for-update", () => {
-    console.log("Checking for Clarity updates...");
-  });
-
-  autoUpdater.on("update-available", (info) => {
-    console.log(
-      `Clarity update available: ${info?.version || "new version"}. Downloading in the background.`,
-    );
-  });
-
-  autoUpdater.on("update-not-available", () => {
-    console.log("Clarity is up to date.");
-  });
-
-  autoUpdater.on("update-downloaded", (info) => {
-    console.log(
-      `Clarity update downloaded: ${info?.version || "new version"}.`,
-    );
-
-    showUpdateReadyUi(info).catch((error) => {
-      console.warn(
-        "Could not show Clarity update UI:",
-        sanitizeUpdaterError(error),
-      );
-    });
-  });
-
-  autoUpdater.on("error", (error) => {
-    /*
-      Updater failures must never stop the writing assistant from working.
-    */
-    console.warn("Clarity updater:", sanitizeUpdaterError(error));
-  });
-
-  return true;
-}
-
-async function checkForUpdatesQuietly() {
-  if (!configureAutoUpdater() || !canUseAutoUpdater()) {
-    return;
-  }
-
-  try {
-    await autoUpdater.checkForUpdates();
-  } catch (error) {
-    /*
-      checkForUpdates can reject in addition to emitting the error event.
-      Keep the failure quiet so Clarity remains fully usable offline.
-    */
-    console.warn("Clarity update check failed:", sanitizeUpdaterError(error));
-  }
-}
-
-function startAutoUpdater() {
-  if (!configureAutoUpdater() || !canUseAutoUpdater()) {
-    return;
-  }
-
-  if (updateCheckTimeout || updateCheckInterval) {
-    return;
-  }
-
-  /*
-    Give Clarity a few seconds to finish opening before the first network
-    request. After that, check periodically while the background process
-    remains alive.
-  */
-  updateCheckTimeout = setTimeout(() => {
-    updateCheckTimeout = null;
-
-    checkForUpdatesQuietly().catch((error) => {
-      console.warn("Clarity update check failed:", sanitizeUpdaterError(error));
-    });
-  }, UPDATE_CHECK_DELAY_MS);
-
-  updateCheckInterval = setInterval(() => {
-    checkForUpdatesQuietly().catch((error) => {
-      console.warn("Clarity update check failed:", sanitizeUpdaterError(error));
-    });
-  }, UPDATE_CHECK_INTERVAL_MS);
-
-  /*
-    These timers should not be the only reason Node keeps the process alive.
-    Clarity already intentionally remains alive for global shortcuts.
-  */
-  updateCheckTimeout.unref?.();
-  updateCheckInterval.unref?.();
-}
-
-function stopAutoUpdaterTimers() {
-  if (updateCheckTimeout) {
-    clearTimeout(updateCheckTimeout);
-    updateCheckTimeout = null;
-  }
-
-  if (updateCheckInterval) {
-    clearInterval(updateCheckInterval);
-    updateCheckInterval = null;
-  }
-}
-
 async function callWritingApi(payload) {
   if (!WRITING_API_URL) {
     return { ok: false, error: "WRITING_API_URL is not configured." };
@@ -4919,10 +4673,6 @@ if (gotSingleInstanceLock) {
       };
     });
 
-    ipcMain.handle("install-update", () => {
-      return installDownloadedUpdate();
-    });
-
     ipcMain.handle("save-settings", (_event, candidate) => {
       const nextSettings = {
         ...settings,
@@ -4962,7 +4712,6 @@ if (gotSingleInstanceLock) {
     });
 
     await showStartupWindow();
-    startAutoUpdater();
   });
 
   app.on("activate", () => {
@@ -4975,7 +4724,6 @@ if (gotSingleInstanceLock) {
 }
 
 app.on("will-quit", () => {
-  stopAutoUpdaterTimers();
   stopPasteHelper();
   stopCaptureHelper();
   globalShortcut.unregisterAll();

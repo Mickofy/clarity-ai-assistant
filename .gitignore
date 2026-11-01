@@ -14,3 +14,9 @@ release/
 Thumbs.db
 
 *.log
+
+# Codex Skill Registry - locally installed skills
+/.agents/skills/
+
+# Second Brain - local automation configuration
+/.codex/second-brain-automation.json

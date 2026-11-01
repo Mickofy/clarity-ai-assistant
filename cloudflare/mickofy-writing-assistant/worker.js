@@ -511,7 +511,7 @@ ${text}
           Authorization: `Bearer ${env.OPENAI_API_KEY}`,
         },
         body: JSON.stringify({
-          model: env.OPENAI_MODEL || "gpt-5.6-luna",
+          model: env.OPENAI_MODEL || "gpt-6-luna",
           instructions,
           input,
           store: false,

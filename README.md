@@ -62,7 +62,7 @@ It cannot modify static webpage content, already-sent messages, or other read-on
 | UI                   | HTML, CSS, JavaScript                     |
 | AI backend           | Cloudflare Workers                        |
 | AI service           | OpenAI API                                |
-| Update delivery      | Electron Updater + Cloudflare Worker + R2 |
+| Release workflow     | Locally built and manually distributed     |
 | Windows integration  | PowerShell + Win32 APIs                   |
 | Packaging            | Electron Builder + NSIS                   |
 | Version control      | Git + GitHub                              |
@@ -134,74 +134,63 @@ The small additional delay during a cross-monitor switch is intentional.
 
 ## Architecture
 
-```text
+```
 Source application
-      │
-      │ selected text
-      ▼
-Clarity AI Assistant
-Electron desktop app
-      │
-      ├── Writing request
-      │       ▼
-      │   Cloudflare Worker
-      │   mickofy-writing-assistant
-      │       ▼
-      │   OpenAI API
-      │
-      └── Update check
-              ▼
-          Cloudflare Worker
-          clarity-updates-gateway
-              ▼
-          Cloudflare R2
-          installer + blockmap + latest.yml
+      | Selected text
+      v
+Clarity AI Assistant (Electron)
+      | Writing request
+      v
+Cloudflare Worker: mickofy-writing-assistant
+      |
+      v
+OpenAI API
 ```
 
 The desktop application does not store the AI provider secret directly in renderer code.
+
+### Worker deployment
+
+The Cloudflare Worker source and Wrangler configuration are in `cloudflare/mickofy-writing-assistant/`. To enable automatic deployments, connect the existing `mickofy-writing-assistant` Worker to this GitHub repository in Cloudflare Workers Builds with:
+
+- Production branch: `main`
+- Root directory: `cloudflare/mickofy-writing-assistant`
+- Deploy command: `npm run deploy`
+- Build command: leave empty
+- Build watch path: `cloudflare/mickofy-writing-assistant/**`
+- Preview builds: disabled
+
+After the one-time connection, changes merged to `main` will deploy from this folder. The Wrangler config keeps the existing Worker name, compatibility date, workers.dev endpoint, and observability settings. Its deploy command uses `--keep-vars`, preserving runtime variables configured in Cloudflare; Worker secrets remain Cloudflare-side.
 
 ---
 
 ## Project Structure
 
-```text
+```
 clarity-ai-assistant/
 ├─ build/
 │  └─ icon.ico
-│
 ├─ docs/
 │  └─ images/
-│     ├─ clarity-home.png
-│     ├─ clarity-express.png
-│     ├─ clarity-understand.png
-│     └─ clarity-client-reply.png
-│
 ├─ src/
 │  ├─ main.js
 │  ├─ preload.js
 │  └─ renderer/
 │     ├─ index.html
 │     ├─ renderer.js
-│     ├─ styles.css
-│     └─ update-about.css
-│
+│     └─ styles.css
 ├─ cloudflare/
-│  ├─ mickofy-writing-assistant/
-│  │  └─ worker.js
-│  │
-│  └─ clarity-updates-gateway/
-│     └─ worker.js
-│
+│  └─ mickofy-writing-assistant/
+│     ├─ worker.js
+│     ├─ package.json
+│     └─ wrangler.jsonc
 ├─ package.json
 ├─ package-lock.json
 ├─ .gitignore
 └─ README.md
 ```
 
-The two Cloudflare Workers remain separate because they serve different responsibilities:
-
-- `mickofy-writing-assistant` handles writing and AI requests;
-- `clarity-updates-gateway` protects and serves the desktop update feed.
+The `mickofy-writing-assistant` Worker handles writing and AI requests.
 
 ---
 
@@ -214,7 +203,7 @@ Development currently targets:
 - Node.js;
 - npm;
 - PowerShell;
-- internet access for AI requests and update checks.
+- internet access for AI requests.
 
 ---
 
@@ -233,18 +222,14 @@ The Electron main process reads the following environment variables:
 ```text
 WRITING_API_URL
 WRITING_APP_TOKEN
-CLARITY_UPDATE_URL
-CLARITY_UPDATE_TOKEN
 ```
 
 ### Purpose
 
-| Variable               | Purpose                                                        |
-| ---------------------- | -------------------------------------------------------------- |
-| `WRITING_API_URL`      | URL of the writing-assistant Cloudflare Worker                 |
-| `WRITING_APP_TOKEN`    | Token used by the desktop app to authenticate writing requests |
-| `CLARITY_UPDATE_URL`   | Update gateway URL                                             |
-| `CLARITY_UPDATE_TOKEN` | Token used to authenticate update requests                     |
+| Variable            | Purpose                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| `WRITING_API_URL`   | URL of the writing-assistant Cloudflare Worker                 |
+| `WRITING_APP_TOKEN` | Token used by the desktop app to authenticate writing requests |
 
 Do not commit production tokens or secrets to GitHub.
 
@@ -259,7 +244,6 @@ Do not commit values such as:
 ```text
 API keys
 application tokens
-update tokens
 private credentials
 ```
 
@@ -282,14 +266,7 @@ Recommended ignored local files include:
 npm start
 ```
 
-In development mode, automatic updates are intentionally disabled.
-
-A healthy startup should include:
-
-```text
-Auto-update disabled in development mode.
-Persistent selected-text capture helper is ready.
-```
+Restart Clarity after making local desktop code changes.
 
 ---
 
@@ -305,101 +282,34 @@ Expected release artifacts include:
 
 ```text
 dist/
-├─ Clarity AI Assistant Setup 1.0.7.exe
-├─ Clarity AI Assistant Setup 1.0.7.exe.blockmap
-└─ latest.yml
+└─ Clarity AI Assistant Setup 1.0.7.exe
 ```
 
 `dist/` remains outside source control.
 
 ---
 
-## Automatic Updates
+## Manual Releases
 
-Clarity uses `electron-updater` with a Cloudflare update gateway.
-
-The update flow is:
-
-```text
-Installed Clarity
-      ↓
-checks latest.yml through update gateway
-      ↓
-compares installed version with latest version
-      ↓
-downloads the matching installer
-      ↓
-verifies the update metadata/checksum
-      ↓
-user chooses Restart Update
-      ↓
-new version is installed
-```
-
-### `latest.yml`
-
-`latest.yml` is the update manifest generated by Electron Builder.
-
-It tells installed copies of Clarity:
-
-- the latest application version;
-- the installer filename;
-- file size;
-- SHA-512 checksum;
-- release metadata.
-
-Do not manually edit the generated `latest.yml` unless there is a specific reason.
-
-### Cloudflare R2 release order
-
-When publishing a new version, upload in this order:
-
-```text
-1. Clarity AI Assistant Setup <version>.exe
-2. Clarity AI Assistant Setup <version>.exe.blockmap
-3. latest.yml
-```
-
-Upload `latest.yml` **last**, because replacing it announces the new release to installed copies of Clarity.
-
-Keep the previous release artifacts temporarily until the new update has been tested end-to-end.
-
----
-
-## Release Workflow
-
-Example patch release:
+Build and distribute each desktop release manually:
 
 ```powershell
-git status
-
 npm version patch --no-git-tag-version
 
+git status
+git diff
 git add .
 git status
 git diff --cached
-
-git commit -m "Release 1.0.7"
+git commit -m "Release 1.0.8"
 git push
 
 npm run build
 ```
 
-Build only after the release source has been committed so the generated installer corresponds to the exact code stored in GitHub.
-
-After building:
-
-1. upload the new `.exe` to Cloudflare R2;
-2. upload the matching `.blockmap`;
-3. replace `latest.yml` last;
-4. launch the previously installed version;
-5. confirm the update is detected;
-6. choose **Restart Update**;
-7. confirm the new version launches;
-8. smoke-test shortcuts and Replace Selection.
+Build after committing so the installer corresponds to the source in Git. The Windows x64 installer is written to `dist/`. Share and install that file manually; installed copies do not check for or install updates automatically.
 
 ---
-
 ## Security and Privacy
 
 Clarity is built around a small Electron security boundary:
@@ -408,7 +318,7 @@ Clarity is built around a small Electron security boundary:
 - `nodeIntegration: false`;
 - renderer sandbox enabled;
 - privileged Electron functionality exposed through the preload bridge;
-- writing and update endpoints protected by application tokens;
+- writing requests protected by the application token;
 - AI/provider secrets belong in backend environment secrets;
 - no continuous keystroke logging;
 - clipboard contents are restored after internal capture operations when possible;
@@ -469,8 +379,6 @@ Version `1.0.7` includes major reliability and workflow improvements, including:
 - reliable Replace Selection;
 - native Windows paste injection;
 - preservation of maximized browser window state after replacement;
-- private Electron auto-update flow through Cloudflare;
-- Clarity-styled update dialog.
 
 ---
 

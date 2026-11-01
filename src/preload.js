@@ -19,8 +19,6 @@ contextBridge.exposeInMainWorld("writingAssistant", {
 
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),
 
-  installUpdate: () => ipcRenderer.invoke("install-update"),
-
   assistantFrameReady: (requestId) =>
     ipcRenderer.send("assistant-frame-ready", requestId),
 
@@ -35,14 +33,4 @@ contextBridge.exposeInMainWorld("writingAssistant", {
     };
   },
 
-  onUpdateReady: (callback) => {
-    if (typeof callback !== "function") return () => {};
-
-    const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on("update-ready", listener);
-
-    return () => {
-      ipcRenderer.removeListener("update-ready", listener);
-    };
-  },
 });

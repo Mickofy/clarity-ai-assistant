@@ -111,12 +111,6 @@ const utilityDrawer = document.getElementById("utilityDrawer");
 const drawerBackdrop = document.getElementById("drawerBackdrop");
 const drawerNotice = document.getElementById("drawerNotice");
 
-const updateDialog = document.getElementById("updateDialog");
-const updateVersion = document.getElementById("updateVersion");
-const updateLaterBtn = document.getElementById("updateLaterBtn");
-const restartUpdateBtn = document.getElementById("restartUpdateBtn");
-const updateError = document.getElementById("updateError");
-
 const minimizeBtn = document.getElementById("minimizeBtn");
 const closeBtn = document.getElementById("closeBtn");
 
@@ -152,7 +146,6 @@ let pendingClientContext = "";
 
 let conversationHistory = [];
 let drawerOpen = false;
-let pendingUpdateVersion = null;
 
 let sourceScrollbarDragging = false;
 let sourceScrollbarPointerId = null;
@@ -174,43 +167,6 @@ async function loadAppInfo() {
     if (appVersion) appVersion.textContent = "—";
     if (appDeveloper) appDeveloper.textContent = "Mickofy";
   }
-}
-
-function clearUpdateError() {
-  if (!updateError) return;
-
-  updateError.textContent = "";
-  updateError.classList.add("hidden");
-}
-
-function closeUpdateDialog() {
-  clearUpdateError();
-
-  if (updateDialog?.open) {
-    updateDialog.close();
-  }
-}
-
-function openUpdateDialog(payload) {
-  pendingUpdateVersion = payload?.version || null;
-
-  if (updateVersion) {
-    updateVersion.textContent = pendingUpdateVersion
-      ? `v${pendingUpdateVersion}`
-      : "NEW VERSION";
-  }
-
-  clearUpdateError();
-
-  if (!updateDialog) return;
-
-  if (!updateDialog.open) {
-    updateDialog.showModal();
-  }
-
-  requestAnimationFrame(() => {
-    restartUpdateBtn?.focus();
-  });
 }
 
 function showView(name) {
@@ -2125,39 +2081,6 @@ drawerCloseBtn.addEventListener("click", () => setDrawer(false));
 
 drawerBackdrop.addEventListener("click", () => setDrawer(false));
 
-updateLaterBtn?.addEventListener("click", () => {
-  closeUpdateDialog();
-});
-
-updateDialog?.addEventListener("cancel", (event) => {
-  event.preventDefault();
-  closeUpdateDialog();
-});
-
-restartUpdateBtn?.addEventListener("click", async () => {
-  clearUpdateError();
-
-  restartUpdateBtn.disabled = true;
-  restartUpdateBtn.textContent = "RESTARTING…";
-
-  try {
-    const result = await window.writingAssistant.installUpdate();
-
-    if (!result?.ok) {
-      throw new Error(result?.error || "Could not start the update.");
-    }
-  } catch (error) {
-    restartUpdateBtn.disabled = false;
-    restartUpdateBtn.textContent = "RESTART UPDATE";
-
-    if (updateError) {
-      updateError.textContent =
-        error?.message || "Could not restart Clarity for the update.";
-      updateError.classList.remove("hidden");
-    }
-  }
-});
-
 minimizeBtn.addEventListener("click", () => {
   minimizeClarityWindow();
 });
@@ -2195,12 +2118,6 @@ document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
 
 /* Keyboard */
 document.addEventListener("keydown", async (event) => {
-  if (updateDialog?.open && event.key === "Escape") {
-    event.preventDefault();
-    closeUpdateDialog();
-    return;
-  }
-
   if (capturingShortcut) {
     event.preventDefault();
     event.stopPropagation();
@@ -2308,11 +2225,6 @@ document.addEventListener("keydown", async (event) => {
 
     createClientReply();
   }
-});
-
-/* When an update has finished downloading */
-window.writingAssistant.onUpdateReady((payload) => {
-  openUpdateDialog(payload);
 });
 
 /* When a global shortcut opens Clarity */
