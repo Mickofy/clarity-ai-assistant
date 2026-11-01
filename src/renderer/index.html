@@ -336,7 +336,14 @@
 
           <div class="result-card compact-card">
             <div class="card-label">CLIENT / CONVERSATION CONTEXT</div>
-            <div id="clientContext" class="card-text context-text"></div>
+            <textarea
+              id="clientContext"
+              class="card-text context-text"
+              aria-label="Client message"
+              spellcheck="true"
+              maxlength="12000"
+              placeholder="Paste or type the client's next message here."
+            ></textarea>
           </div>
 
           <div class="result-card reply-card">
@@ -345,6 +352,7 @@
             <textarea
               id="roughReply"
               spellcheck="true"
+              maxlength="12000"
               placeholder="Example: The current setup looks okay, but I want to check whether it could be difficult to maintain long term."
             ></textarea>
           </div>

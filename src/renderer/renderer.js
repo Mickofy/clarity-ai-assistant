@@ -116,9 +116,11 @@ const closeBtn = document.getElementById("closeBtn");
 
 const DEFAULT_SETTINGS = {
   shortcuts: {
-    openAssistant: "CommandOrControl+Alt+F",
-    quickGrammar: "CommandOrControl+Alt+R",
-    quickUnderstand: "CommandOrControl+Alt+U",
+    openAssistant: "CommandOrControl+Alt+Q",
+    quickExpress: "CommandOrControl+Alt+W",
+    quickUnderstand: "CommandOrControl+Alt+E",
+    quickClientReply: "CommandOrControl+Alt+R",
+    quickGrammar: "CommandOrControl+Alt+T",
   },
 
   defaultInputSource: "selected",
@@ -142,9 +144,11 @@ let sourceInitialized = {
 
 let capturingShortcut = null;
 let currentWritingMode = null;
-let pendingClientContext = "";
 
 let conversationHistory = [];
+let committedClientReply = null;
+let clientReplyTurnId = 0;
+let writingRequestId = 0;
 let drawerOpen = false;
 
 let sourceScrollbarDragging = false;
@@ -185,28 +189,18 @@ function showView(name) {
   }
 }
 
-/*
-  REPLACE SELECTION BACKGROUND PREP
-
-  Replace Selection intentionally paints a neutral view before the main
-  process hides Clarity and returns focus to the original source app.
-
-  These helpers were referenced by the Replace Selection click handler but
-  were accidentally missing from renderer.js. That caused a ReferenceError
-  before the IPC call could run, making the button appear to do nothing.
-*/
-function prepareWindowForBackground() {
-  hideNotice();
-
-  if (loadingTitle) {
-    loadingTitle.textContent = "Replacing selected text…";
+async function requestWriting(payload) {
+  const requestId = ++writingRequestId;
+  try {
+    const response = await window.writingAssistant.improveText(payload);
+    return requestId === writingRequestId
+      ? response || { ok: false, error: "The writing service returned an invalid response." }
+      : null;
+  } catch {
+    return requestId === writingRequestId
+      ? { ok: false, error: "Could not connect to the writing service. Please try again." }
+      : null;
   }
-
-  if (loadingNote) {
-    loadingNote.textContent = "Returning the result to your source app.";
-  }
-
-  showView("loading");
 }
 
 function showNotice(title, message) {
@@ -679,6 +673,14 @@ function initializeClientReplyUi() {
       >
         COPY REPLY
       </button>
+
+      <button
+        id="clientNextMessageBtn"
+        class="secondary-action"
+        type="button"
+      >
+        NEXT MESSAGE
+      </button>
     </div>
   `;
 
@@ -742,6 +744,16 @@ function initializeClientReplyUi() {
   clientReplyEditorPanel
     .querySelector("#clientCopyReplyBtn")
     ?.addEventListener("click", copyClientReplyEditor);
+
+  clientReplyEditorPanel
+    .querySelector("#clientNextMessageBtn")
+    ?.addEventListener("click", () => {
+      commitConversationReply(clientReplyEditor?.value || "");
+      openClientReplyComposer("");
+      clientReplyHistoryExpanded = conversationHistory.length > 0;
+      renderClientReplyContext();
+      requestAnimationFrame(() => clientContext.focus());
+    });
 
   clientReplyEditorPanel
     .querySelectorAll("[data-client-refine]")
@@ -846,14 +858,10 @@ function showClientReplyClarification({
 }
 
 function clientReplyLatestMessage() {
-  return pendingClientContext || sourceText.value.trim();
+  return clientContext.value.trim();
 }
 
 function renderClientReplyContext() {
-  const latest = clientReplyLatestMessage();
-
-  clientContext.textContent = latest || "No client message is available.";
-
   updateConversationCount();
 
   const historyList = clientReplyHistoryPanel?.querySelector(
@@ -964,7 +972,11 @@ function setClientReplyStage(stage) {
 }
 
 function openClientReplyComposer(clientMessage) {
-  pendingClientContext = String(clientMessage || "").trim();
+  writingRequestId += 1;
+  clientReplyTurnId += 1;
+  clientContext.value = String(clientMessage || "").trim();
+  committedClientReply = null;
+  if (clientReplyEditor) clientReplyEditor.value = "";
 
   clientReplyOriginalIntent = "";
   clientReplySuggestions = [];
@@ -1232,6 +1244,11 @@ async function generateClientReplySuggestions() {
     return;
   }
 
+  if (latest.length > 12000) {
+    showNotice("Client message is too long", "Use up to 12,000 characters for the latest message.");
+    return;
+  }
+
   if (clientReplyStage === "compose") {
     clientReplyOriginalIntent = roughReply.value.trim();
   }
@@ -1245,12 +1262,14 @@ async function generateClientReplySuggestions() {
 
   const profiles = clientReplyVariationProfiles();
 
-  const response = await window.writingAssistant.improveText({
+  const response = await requestWriting({
     text: clientReplyRequestText(),
     context: buildClientReplyOptionsAiContext(profiles),
     mode: "client_reply_options",
     explanationLanguage: currentSettings.understandExplanation,
   });
+
+  if (!response) return;
 
   if (!response?.ok) {
     showView("clientReply");
@@ -1372,11 +1391,13 @@ async function refineClientReply(kind) {
       "Keeping your meaning and wording as close as possible.",
     );
 
-    const response = await window.writingAssistant.improveText({
+    const response = await requestWriting({
       text: currentText,
       mode: "grammar",
       explanationLanguage: currentSettings.understandExplanation,
     });
+
+    if (!response) return;
 
     showView("clientReply");
     setClientReplyStage("editor");
@@ -1407,7 +1428,7 @@ async function refineClientReply(kind) {
       : "Improving clarity, tone, and flow without changing your intent.",
   );
 
-  const response = await window.writingAssistant.improveText({
+  const response = await requestWriting({
     text: currentText,
     context: buildClientReplyAiContext({
       forceLength: isShorter ? "Short" : "",
@@ -1418,6 +1439,8 @@ async function refineClientReply(kind) {
     mode: "client_reply",
     explanationLanguage: currentSettings.understandExplanation,
   });
+
+  if (!response) return;
 
   showView("clientReply");
   setClientReplyStage("editor");
@@ -1440,16 +1463,36 @@ async function refineClientReply(kind) {
 
 async function copyClientReplyEditor() {
   const text = clientReplyEditor?.value.trim() || "";
+  const turnId = clientReplyTurnId;
 
   if (!text) {
     return;
   }
 
-  commitConversationReply(text);
+  const copied = await copyText(text, document.getElementById("clientCopyReplyBtn"));
+  if (copied && turnId === clientReplyTurnId) {
+    commitConversationReply(text);
+    if (clientReplyEditorMeta) {
+      clientReplyEditorMeta.textContent =
+        "Copied. Choose Next message to continue this conversation here.";
+    }
+  }
+}
 
-  await window.writingAssistant.copyResult(text);
-
-  await hideClarityWindow();
+async function copyText(text, button) {
+  if (button.disabled) return false;
+  button.disabled = true;
+  try {
+    const copied = await window.writingAssistant.copyResult(text);
+    if (!copied) throw new Error("Copy failed");
+    showNotice("Copied", "Your text is on the clipboard. You can keep working here.");
+    return true;
+  } catch {
+    showNotice("Could not copy", "Your draft is still here. Please try again.");
+    return false;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function setLoading(mode) {
@@ -1539,6 +1582,7 @@ function setShortcutCaptureLoading(action, reason) {
   screen to be painted before revealing the BrowserWindow again.
 */
 async function hideClarityWindow() {
+  writingRequestId += 1;
   return window.writingAssistant.hideWindow();
 }
 
@@ -1679,12 +1723,16 @@ function renderUnderstandResult(result) {
 
 function buildConversationContext(latestClientText) {
   const recent = conversationHistory.slice(-6);
-
-  const history = recent
-    .map(
-      (entry) => `${entry.role === "client" ? "Client" : "You"}: ${entry.text}`,
-    )
-    .join("\n");
+  // Reserve room for the latest message and preferences within the API limit.
+  let remaining = Math.max(0, 15000 - latestClientText.length);
+  const included = [];
+  for (const entry of recent.reverse()) {
+    const line = `${entry.role === "client" ? "Client" : "You"}: ${entry.text}`;
+    if (line.length + 1 > remaining) break;
+    included.unshift(line);
+    remaining -= line.length + 1;
+  }
+  const history = included.join("\n");
 
   return [
     history ? `RECENT CONVERSATION:\n${history}` : "",
@@ -1724,14 +1772,17 @@ async function runMode(mode) {
     return;
   }
 
+  currentWritingMode = mode;
   setLoading(mode);
 
-  const response = await window.writingAssistant.improveText({
+  const response = await requestWriting({
     text,
     mode,
 
     explanationLanguage: currentSettings.understandExplanation,
   });
+
+  if (!response) return;
 
   if (!response?.ok) {
     showView("main");
@@ -1761,7 +1812,13 @@ function commitConversationReply(finalText) {
     return;
   }
 
-  const clientText = pendingClientContext || sourceText.value.trim();
+  if (committedClientReply && conversationHistory.includes(committedClientReply)) {
+    committedClientReply.text = finalText.trim();
+    renderClientReplyContext();
+    return;
+  }
+
+  const clientText = clientReplyLatestMessage();
 
   if (clientText) {
     conversationHistory.push({
@@ -1770,21 +1827,15 @@ function commitConversationReply(finalText) {
     });
   }
 
-  conversationHistory.push({
+  committedClientReply = {
     role: "user",
     text: finalText.trim(),
-  });
+  };
+  conversationHistory.push(committedClientReply);
 
   conversationHistory = conversationHistory.slice(-8);
 
-  pendingClientContext = "";
-
-  clientReplyOriginalIntent = "";
-  clientReplySuggestions = [];
-  clientReplyHistoryExpanded = false;
-  hideClientReplyClarification();
-
-  updateConversationCount();
+  renderClientReplyContext();
 }
 
 function displayShortcut(accelerator) {
@@ -1996,6 +2047,7 @@ initializeClientReplyUi();
 /* Back buttons */
 document.querySelectorAll("[data-back]").forEach((button) => {
   button.addEventListener("click", () => {
+    writingRequestId += 1;
     if (currentView === "clientReply" && button.closest("#clientReplyView")) {
       if (clientReplyStage === "editor") {
         setClientReplyStage("suggestions");
@@ -2021,11 +2073,7 @@ copySuggestionBtn.addEventListener("click", async () => {
     return;
   }
 
-  commitConversationReply(text);
-
-  await window.writingAssistant.copyResult(text);
-
-  await hideClarityWindow();
+  if (await copyText(text, copySuggestionBtn)) commitConversationReply(text);
 });
 
 replaceSuggestionBtn.addEventListener("click", async () => {
@@ -2035,16 +2083,16 @@ replaceSuggestionBtn.addEventListener("click", async () => {
     return;
   }
 
-  /*
-    Update the renderer state before Clarity hides, but do not wait two
-    animation frames for this neutral view to physically paint.
-
-    The main process now uses a warmed paste helper and adaptively confirms
-    source-window focus.
-  */
-  prepareWindowForBackground();
-
-  const result = await window.writingAssistant.replaceSelection(text);
+  if (replaceSuggestionBtn.disabled) return;
+  replaceSuggestionBtn.disabled = true;
+  let result;
+  try {
+    result = await window.writingAssistant.replaceSelection(text);
+  } catch {
+    result = { ok: false, error: "Could not paste the text. Use Copy instead." };
+  } finally {
+    replaceSuggestionBtn.disabled = false;
+  }
 
   if (!result?.ok) {
     /*
@@ -2062,6 +2110,12 @@ replaceSuggestionBtn.addEventListener("click", async () => {
   }
 
   commitConversationReply(text);
+  showNotice("Pasted", "Your result is still here. Check the text in your source app.");
+});
+
+clientContext.addEventListener("input", () => {
+  clientReplyTurnId += 1;
+  committedClientReply = null;
 });
 
 helpReplyBtn.addEventListener("click", () => {
@@ -2070,6 +2124,7 @@ helpReplyBtn.addEventListener("click", () => {
 
 clearConversationBtn.addEventListener("click", () => {
   conversationHistory = [];
+  committedClientReply = null;
   clientReplyHistoryExpanded = false;
   renderClientReplyContext();
 });
@@ -2171,7 +2226,17 @@ document.addEventListener("keydown", async (event) => {
     if (currentView === "main") {
       await hideClarityWindow();
     } else {
-      showView("main");
+      writingRequestId += 1;
+      if (currentView === "clientReply" && clientReplyStage === "editor") {
+        setClientReplyStage("suggestions");
+      } else if (currentView === "clientReply" && clientReplyStage === "suggestions") {
+        setClientReplyStage("compose");
+      } else if (currentView === "loading" && currentWritingMode === "client_reply") {
+        showView("clientReply");
+        setClientReplyStage(clientReplyStage);
+      } else {
+        showView("main");
+      }
     }
 
     return;
@@ -2229,6 +2294,7 @@ document.addEventListener("keydown", async (event) => {
 
 /* When a global shortcut opens Clarity */
 window.writingAssistant.onAssistantOpened(async (payload) => {
+  writingRequestId += 1;
   setDrawer(false);
 
   currentSettings =

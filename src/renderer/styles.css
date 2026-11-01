@@ -1382,6 +1382,19 @@ select:focus:not(:focus-visible) {
   scrollbar-color: #555555 transparent;
 }
 
+textarea.context-text {
+  display: block;
+  width: 100%;
+  height: 80px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+}
+
 .reply-card {
   min-height: 150px;
 
@@ -1797,7 +1810,11 @@ select:focus:not(:focus-visible) {
 }
 
 .client-editor-actions {
-  justify-content: space-between;
+  justify-content: flex-end;
+}
+
+#clientEditorBackBtn {
+  margin-right: auto;
 }
 
 /*
@@ -1809,7 +1826,10 @@ select:focus:not(:focus-visible) {
 
 #clientReplyView .reply-card textarea {
   height: calc(100% - 42px);
+}
 
+#clientReplyView #clientContext,
+#clientReplyView .reply-card textarea {
   margin-top: 10px;
   padding: 12px 13px;
 
@@ -1824,10 +1844,13 @@ select:focus:not(:focus-visible) {
     background 120ms ease;
 }
 
+#clientReplyView #clientContext:hover,
 #clientReplyView .reply-card textarea:hover {
   border-color: #444444;
 }
 
+#clientReplyView #clientContext:focus,
+#clientReplyView #clientContext:focus-visible,
 #clientReplyView .reply-card textarea:focus,
 #clientReplyView .reply-card textarea:focus-visible {
   outline: none;
@@ -1839,6 +1862,7 @@ select:focus:not(:focus-visible) {
   box-shadow: 0 0 0 1px var(--focus-soft);
 }
 
+#clientReplyView #clientContext::placeholder,
 #clientReplyView .reply-card textarea::placeholder {
   color: #777777;
 }

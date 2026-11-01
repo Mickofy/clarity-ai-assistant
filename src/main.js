@@ -13,6 +13,7 @@ const { Blob } = require("buffer");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { createPasteSession } = require("./paste-session");
 
 let mainWindow = null;
 let lastExternalWindowHandle = null;
@@ -4530,6 +4531,13 @@ async function callWritingApi(payload) {
   }
 }
 
+const pasteSelectionAndKeepOpen = createPasteSession({
+  getWindow: () => mainWindow,
+  getOpenRequestId: () => assistantOpenRequestId,
+  paste: replaceSelection,
+  delay,
+});
+
 if (gotSingleInstanceLock) {
   app.on("second-instance", () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -4624,7 +4632,7 @@ if (gotSingleInstanceLock) {
     });
 
     ipcMain.handle("replace-selection", async (_event, value) => {
-      return replaceSelection(value);
+      return pasteSelectionAndKeepOpen(value);
     });
 
     ipcMain.handle("hide-window", () => {

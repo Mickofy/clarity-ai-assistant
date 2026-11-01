@@ -4,7 +4,7 @@
 
 Clarity is a personal portfolio project built with **Electron, JavaScript, Cloudflare Workers, and the OpenAI API**. It works directly with selected text in Windows applications so users can rewrite, understand, correct, or reply to text without constantly moving content between apps.
 
-**Current version:** `1.0.7`
+**Current version:** `1.0.8`
 
 ---
 
@@ -32,6 +32,10 @@ Break down difficult client messages, technical wording, or unfamiliar terms int
 
 Turn a client message and an optional rough response into multiple professional reply options that can be reviewed and edited before sending.
 
+Edit the client message directly in Client Reply. Copy keeps the editor open; choose **Next message** to save the current client message and edited reply as conversation context, then paste or type the next client message on the same screen. Copying first is optional. Repeated copies and Next message update the same turn without duplicating it, and **Clear** starts fresh. Saved replies are drafts, not confirmation that a message was sent. This context is held in memory for the current renderer session and is cleared when the app restarts or its window is recreated.
+
+Grammar corrections keep your wording and voice close to the original. Express Clearly also rewrites rough AI prompts while preserving their instructions and constraints, instead of answering them.
+
 ![Clarity Client Reply](docs/images/clarity-client-reply.png)
 
 ### Grammar Only
@@ -41,6 +45,8 @@ Correct grammar, spelling, punctuation, and minor awkward wording while keeping 
 ### Replace Selection
 
 After reviewing a result, Clarity can return the approved text directly to the selected editable text in the source application.
+
+Clarity temporarily hides to let Windows paste into the source app, then shows the existing result again without taking keyboard focus from the source. Copy also leaves the result open.
 
 Replace Selection is intended for editable controls such as:
 

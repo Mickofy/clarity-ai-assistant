@@ -185,3 +185,99 @@ test("maps OpenAI errors and malformed structured output to safe worker errors",
     error: "The writing service returned an invalid result.",
   });
 });
+
+test("AI prompt rewriting preserves source constraints and separates revision instructions", async () => {
+  const payload = {
+    mode: "express", purpose: "prompt", operation: "refine",
+    text: "inspect checkout muna, don't edit or deploy, plan first",
+    context: "Original notes: maybe the script causes it; still unconfirmed.",
+    refinement: "Make the task clearer. Keep all approval boundaries.",
+  };
+  const result = await invokeWorker({ payload, openAIResponse: { output_text: '{"text":"A sample draft."}' } });
+  const request = result.requests[0].body;
+  assert.match(request.instructions, /WRITING PURPOSE: AI PROMPT/);
+  assert.match(request.instructions, /Do not perform or answer the task/);
+  assert.match(request.instructions, /REFINE THE CURRENT DRAFT/);
+  assert.ok(request.input.includes(payload.text));
+  assert.ok(request.input.includes(payload.context));
+  assert.ok(request.input.includes("<revision_request>\n" + payload.refinement));
+  assert.equal(request.store, false);
+});
+
+test("Express Clearly rewrites task instructions while preserving scope and list structure", async () => {
+  const payload = {
+    mode: "express",
+    purpose: "prompt",
+    text: "check why replies disappear. first inspect logs, then explain cause. don't edit files or deploy. maybe paste handler closes window, not sure.",
+  };
+  const result = await invokeWorker({
+    payload,
+    openAIResponse: { output_text: '{"text":"Rewritten prompt."}' },
+  });
+  const request = result.requests[0].body;
+
+  assert.match(request.instructions, /rewrite those instructions as a clear message or prompt/i);
+  assert.match(request.instructions, /Do not carry\s+them out, answer their questions/i);
+  assert.match(request.instructions, /Preserve\s+meaningful lists and their order/i);
+  assert.match(request.instructions, /Do not add steps, requirements, tools, deliverables/i);
+  assert.match(request.instructions, /Preserve the user's uncertainty, reasoning, and scope/i);
+  assert.ok(request.input.includes(payload.text));
+  assert.deepEqual(result.body.result, { text: "Rewritten prompt." });
+});
+
+test("client reply prompts maintain the latest turn without adding facts or commentary", async () => {
+  for (const mode of ["client_reply", "client_reply_options"]) {
+    const result = await invokeWorker({
+      payload: {
+        mode,
+        text: "still checking this, no update yet",
+        context: "Client: Any update?\nMe: I am checking.\nClient: What did you find?",
+      },
+      openAIResponse: { output_text: "{}" },
+    });
+    const instructions = result.requests[0].body.instructions;
+
+    assert.match(instructions, /latest (?:client )?message/i);
+    assert.match(instructions, /avoid\s+repeating information/i);
+    assert.match(instructions, /Never invent promises or deadlines/i);
+    if (mode === "client_reply") {
+      assert.match(instructions, /draft only the user's side/i);
+      assert.match(instructions, /do not add an\s+outcome, cause, timeline/i);
+    }
+  }
+});
+
+test("grammar prompts keep corrections conservative and preserve the user's voice", async () => {
+  const result = await invokeWorker({
+    payload: { mode: "grammar", text: "i check it now" },
+    openAIResponse: { output_text: '{"text":"I am checking it now."}' },
+  });
+
+  const instructions = result.requests[0].body.instructions;
+  assert.match(instructions, /keep the original structure and voice/i);
+  assert.match(instructions, /do not expand a short\s+message/i);
+  assert.match(instructions, /Do not add new information/i);
+});
+
+test("idea development is opt-in and keeps suggestions distinct from established facts", async () => {
+  const developed = await invokeWorker({
+    payload: { mode: "express", operation: "develop", text: "make the client replies continuous" },
+    openAIResponse: { output_text: '{"text":"Ideas to consider."}' },
+  });
+  assert.match(developed.requests[0].body.instructions, /OPERATION: DEVELOP AN IDEA/);
+  assert.match(developed.requests[0].body.instructions, /Keep suggestions distinct from established facts/);
+  const ordinary = await invokeWorker({
+    payload: { mode: "express", text: "maybe cache issue. checking pa" },
+    openAIResponse: { output_text: '{"text":"The cache may be involved. I am still checking."}' },
+  });
+  assert.ok(!ordinary.requests[0].body.instructions.includes("OPERATION: DEVELOP AN IDEA"));
+  assert.match(ordinary.requests[0].body.instructions, /WRITING PURPOSE: MESSAGE/);
+});
+
+test("new writing controls reject invalid requests before calling OpenAI", async () => {
+  for (const extra of [{ purpose: "unknown" }, { operation: "execute" }, { refinement: "x".repeat(2001) }, { context: "x".repeat(40001) }]) {
+    const result = await invokeWorker({ payload: { mode: "express", text: "notes", ...extra }, openAIResponse: {} });
+    assert.equal(result.response.status, 400);
+    assert.equal(result.requests.length, 0);
+  }
+});
