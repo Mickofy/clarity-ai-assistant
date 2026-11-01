@@ -9,13 +9,13 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test": "node --test",
     "pack": "electron-builder --dir",
     "build": "electron-builder --win --x64",
     "dist": "electron-builder --win --x64"
   },
   "dependencies": {
-    "dotenv": "^17.2.0",
-    "electron-updater": "^6.6.9"
+    "dotenv": "^17.2.0"
   },
   "devDependencies": {
     "electron": "^44.0.0",
@@ -35,12 +35,6 @@
       "package.json"
     ],
     "artifactName": "${productName} Setup ${version}.${ext}",
-    "publish": [
-      {
-        "provider": "generic",
-        "url": "https://clarity-updates-gateway.ryowajeqwerty.workers.dev"
-      }
-    ],
     "win": {
       "icon": "build/icon.ico",
       "target": [
