@@ -4,8 +4,6 @@ contextBridge.exposeInMainWorld("writingAssistant", {
   refreshInput: (source) => ipcRenderer.invoke("refresh-input", source),
 
   improveText: (payload) => ipcRenderer.invoke("improve-text", payload),
-  cancelRequest: (requestId) => ipcRenderer.invoke("cancel-writing-request", requestId),
-  toggleMaximize: () => ipcRenderer.invoke("toggle-maximize-window"),
 
   copyResult: (text) => ipcRenderer.invoke("copy-result", text),
 
@@ -16,8 +14,6 @@ contextBridge.exposeInMainWorld("writingAssistant", {
   minimizeWindow: () => ipcRenderer.invoke("minimize-window"),
 
   getSettings: () => ipcRenderer.invoke("get-settings"),
-
-  getShortcutStatus: () => ipcRenderer.invoke("get-shortcut-status"),
 
   saveSettings: (settings) => ipcRenderer.invoke("save-settings", settings),
 

@@ -9,7 +9,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Clarity AI Assistant</title>
     <link rel="stylesheet" href="./styles.css" />
-    <link rel="stylesheet" href="./workspace.css" />
   </head>
 
   <body>
@@ -19,7 +18,6 @@
           <div class="app-name">CLARITY AI ASSISTANT</div>
 
           <div class="window-actions">
-            <button id="expandBtn" class="window-button" type="button" title="Expand or restore workspace" aria-label="Expand or restore workspace">□</button>
             <button
               id="drawerToggleBtn"
               class="window-button"
@@ -81,23 +79,6 @@
               manually.
             </span>
           </div>
-        </div>
-
-        <nav class="workspace-nav" aria-label="Writing workspaces">
-          <button type="button" data-workspace="main">Home</button>
-          <button type="button" data-workspace="express">Express Clearly</button>
-          <button type="button" data-workspace="clientReply">Client Reply</button>
-          <span id="saveStatus" role="status" aria-live="polite">Saved on this device</span>
-        </nav>
-        <div id="requestStatus" class="request-status hidden" role="status" aria-live="polite">
-          <span id="requestMessage">Working…</span>
-          <button id="cancelRequestBtn" type="button">Cancel</button>
-          <button id="retryRequestBtn" class="hidden" type="button">Retry</button>
-        </div>
-        <div id="captureImport" class="request-status hidden">
-          <span>New captured text is available. Your current draft is preserved.</span>
-          <button id="useCaptureBtn" type="button">Use captured text</button>
-          <button id="dismissCaptureBtn" type="button">Keep current draft</button>
         </div>
 
         <div id="mainView" class="main-view view">
@@ -164,8 +145,7 @@
                 id="sourceText"
                 spellcheck="true"
                 maxlength="12000"
-                aria-label="Your rough thoughts or text to work on"
-                placeholder="Write your rough thoughts here. English, Taglish, or Tagalog is okay.&#10;You can also import selected text or your clipboard."
+                placeholder="Highlight text in another app, then open the assistant.&#10;You can also type or paste text here directly."
               ></textarea>
 
               <div
@@ -255,12 +235,8 @@
           </div>
         </div>
 
-        <div id="writingResultView" class="view result-view writing-workspace hidden">
-          <div class="workspace-toolbar">
-            <label>Saved drafts <select id="writingDraftSelect" aria-label="Saved writing drafts"></select></label>
-            <button id="newWritingDraftBtn" type="button">New draft</button>
-            <button id="deleteWritingDraftBtn" type="button">Delete draft</button>
-          </div>
+        <div id="writingResultView" class="view result-view hidden">
+          <button class="text-button" type="button" data-back>← BACK</button>
 
           <div class="result-heading">
             <div id="writingResultEyebrow" class="section-kicker">
@@ -269,54 +245,19 @@
             <h2 id="writingResultTitle">Suggested message</h2>
           </div>
 
-          <div id="writingPurposeGroup" class="purpose-row">
-            <label for="writingPurpose">Writing purpose</label>
-            <select id="writingPurpose">
-              <option value="message">Message</option>
-              <option value="prompt">AI Prompt</option>
-            </select>
-            <span id="writingPurposeHelp">Natural wording that preserves your meaning.</span>
-          </div>
-          <details class="result-card original-card" open>
-            <summary>Your rough thoughts</summary>
-            <textarea id="writingOriginal" aria-label="Original rough thoughts" maxlength="12000"
-              placeholder="Write freely. Fragments and mixed languages are welcome."></textarea>
-          </details>
-          <div class="inline-actions">
-            <button id="generateWritingBtn" type="button" class="primary-action">Make it clear</button>
-            <button id="developWritingBtn" type="button">Help me develop this</button>
-          </div>
-          <details class="result-card">
-            <summary>Additional facts or corrections</summary>
-            <label for="writingContextNotes">Saved with this draft. Later corrections take precedence.</label>
-            <textarea id="writingContextNotes" maxlength="6000" aria-label="Additional writing facts or corrections"></textarea>
-          </details>
-          <details id="intentCard" class="result-card hidden">
-            <summary>What Clarity understood</summary>
+          <div id="intentCard" class="result-card hidden">
+            <div class="card-label">WHAT I UNDERSTOOD</div>
             <div id="intentSummary" class="card-text"></div>
-          </details>
+          </div>
 
           <div id="clarificationCard" class="result-card hidden">
             <div class="card-label">MORE CONTEXT NEEDED</div>
             <div id="clarificationQuestion" class="card-text"></div>
-            <label for="writingClarificationAnswer">Your answer</label>
-            <textarea id="writingClarificationAnswer" maxlength="2000" placeholder="A few rough notes are enough."></textarea>
-            <button id="answerWritingBtn" type="button">Continue with these details</button>
           </div>
 
           <div id="suggestionCard" class="result-card suggestion-card">
             <div class="card-label">RESULT</div>
-            <textarea id="suggestionText" spellcheck="true" maxlength="12000" aria-label="Editable writing result"></textarea>
-          </div>
-          <div id="writingRefinement" class="result-card hidden">
-            <label for="writingFollowup">What would you like to change?</label>
-            <textarea id="writingFollowup" maxlength="2000" placeholder="For example: make it more direct, but keep the uncertainty."></textarea>
-            <div class="inline-actions">
-              <button id="refineWritingBtn" type="button">Refine draft</button>
-              <button type="button" data-writing-refine="Make it shorter. Preserve every important detail and constraint.">Shorter</button>
-              <button type="button" data-writing-refine="Use simpler, more natural wording while preserving my voice.">More natural</button>
-              <button id="undoWritingBtn" type="button">Undo AI revision</button>
-            </div>
+            <textarea id="suggestionText" spellcheck="true"></textarea>
           </div>
 
           <div class="result-actions">
@@ -395,7 +336,14 @@
 
           <div class="result-card compact-card">
             <div class="card-label">CLIENT / CONVERSATION CONTEXT</div>
-            <div id="clientContext" class="card-text context-text"></div>
+            <textarea
+              id="clientContext"
+              class="card-text context-text"
+              aria-label="Client message"
+              spellcheck="true"
+              maxlength="12000"
+              placeholder="Paste or type the client's next message here."
+            ></textarea>
           </div>
 
           <div class="result-card reply-card">
@@ -404,6 +352,7 @@
             <textarea
               id="roughReply"
               spellcheck="true"
+              maxlength="12000"
               placeholder="Example: The current setup looks okay, but I want to check whether it could be difficult to maintain long term."
             ></textarea>
           </div>
@@ -428,9 +377,6 @@
         <aside
           id="utilityDrawer"
           class="utility-drawer"
-          role="dialog"
-          aria-modal="false"
-          inert
           aria-hidden="true"
           aria-label="Shortcuts and settings"
         >
@@ -454,7 +400,6 @@
           <div class="drawer-scroll">
             <section class="drawer-section">
               <div class="sidebar-kicker">GLOBAL SHORTCUTS</div>
-              <div id="shortcutStatus" class="shortcut-status hidden" role="status" aria-live="polite"></div>
 
               <div class="shortcut-row">
                 <span>Open Assistant</span>
@@ -535,7 +480,7 @@
 
               <div class="key-row">
                 <span>Esc</span>
-                <span>Cancel request / Hide workspace</span>
+                <span>Back / Close</span>
               </div>
             </section>
 
@@ -564,8 +509,6 @@
                 English, Taglish, and Tagalog input are detected automatically.
                 Writing output stays in natural English.
               </div>
-            <div class="setting-note">Drafts and client conversations are saved locally on this device. Copied replies are not marked as sent automatically.</div>
-            <button id="clearSavedWorkspacesBtn" type="button" class="secondary-action">Clear saved drafts and conversations</button>
             </section>
 
             <section class="drawer-section about-section">
@@ -592,8 +535,6 @@
       </section>
     </main>
 
-    <script src="./workspace.js"></script>
-    <script src="./flows.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

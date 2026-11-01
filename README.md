@@ -4,16 +4,11 @@
 
 Clarity is a personal portfolio project built with **Electron, JavaScript, Cloudflare Workers, and the OpenAI API**. It works directly with selected text in Windows applications so users can rewrite, understand, correct, or reply to text without constantly moving content between apps.
 
-**Current version:** `1.0.7`
+**Current version:** `1.0.8`
 
 ---
 
 ## Preview
-
-The writing workspace improvements on this branch are unreleased and need a new
-manual Electron release after review. Screenshots below show the released
-interface. See [the workspace review and release notes](docs/writing-workspaces.md)
-for the new flows and validation.
 
 ![Clarity AI Assistant](docs/images/clarity-home.png)
 
@@ -24,11 +19,6 @@ for the new flows and validation.
 ### Express Clearly
 
 Turn rough thoughts, incomplete sentences, Taglish, or unclear English into a cleaner and more natural message while preserving the intended meaning.
-
-The new workspace offers **Message** and **AI Prompt** purposes, editable saved
-drafts, inline clarification, follow-up refinement, and undo for AI revisions.
-**Help me develop this** offers clearly labelled suggestions separately from a
-faithful rewrite.
 
 ![Clarity Express Clearly](docs/images/clarity-express.png)
 
@@ -42,10 +32,9 @@ Break down difficult client messages, technical wording, or unfamiliar terms int
 
 Turn a client message and an optional rough response into multiple professional reply options that can be reviewed and edited before sending.
 
-Keep separate conversations on this device and add the next client message inside
-Client Reply. The first draft opens directly for editing, with alternatives
-available on demand. Copied drafts are distinguished from replies explicitly
-marked as sent.
+Edit the client message directly in Client Reply. Copy keeps the editor open; choose **Next message** to save the current client message and edited reply as conversation context, then paste or type the next client message on the same screen. Copying first is optional. Repeated copies and Next message update the same turn without duplicating it, and **Clear** starts fresh. Saved replies are drafts, not confirmation that a message was sent. This context is held in memory for the current renderer session and is cleared when the app restarts or its window is recreated.
+
+Grammar corrections keep your wording and voice close to the original. Express Clearly also rewrites rough AI prompts while preserving their instructions and constraints, instead of answering them.
 
 ![Clarity Client Reply](docs/images/clarity-client-reply.png)
 
@@ -57,10 +46,7 @@ Correct grammar, spelling, punctuation, and minor awkward wording while keeping 
 
 After reviewing a result, Clarity can return the approved text directly to the selected editable text in the source application.
 
-Copy keeps the workspace open and reports clipboard failures. Replace Selection
-briefly hands focus to the destination, then shows the preserved workspace without
-taking focus away from the destination. Windows confirms that the paste shortcut
-was sent; verify the resulting text in the destination editor.
+Clarity temporarily hides to let Windows paste into the source app, then shows the existing result again without taking keyboard focus from the source. Copy also leaves the result open.
 
 Replace Selection is intended for editable controls such as:
 
@@ -149,11 +135,6 @@ For reliability:
 - the renderer uses a frame-ready handshake to avoid stale content and visual flashes.
 
 The small additional delay during a cross-monitor switch is intentional.
-
-Drafts are saved locally as you edit, so recreating the window can restore the
-workspace. The window can be resized or expanded for longer writing. Clarity
-remembers the last non-maximized size across launches and fits it to the current
-monitor when needed.
 
 ---
 
@@ -286,11 +267,6 @@ Recommended ignored local files include:
 ---
 
 ## Run in Development
-
-Run focused unit, Worker contract, and isolated Electron renderer tests with
-npm test. Renderer tests use synthetic inputs, mocked IPC, and a temporary
-profile; they do not call OpenAI or paste into real applications. On restricted
-Windows runners, Electron needs access to its runtime DLLs and temporary profile.
 
 ```powershell
 npm start

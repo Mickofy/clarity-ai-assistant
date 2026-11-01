@@ -83,15 +83,20 @@ let clientReplyStage = "compose";
 let clientReplyTone = "professional";
 let clientReplyLength = "normal";
 let clientReplySuggestions = [];
+let clientReplyOriginalIntent = "";
+let clientReplyHistoryExpanded = false;
 
 let clientReplyPreferences = null;
 let clientReplyHistoryPanel = null;
+let clientReplyHistoryToggle = null;
 let clientReplyClarificationCard = null;
 let clientReplyClarificationQuestion = null;
+let clientReplyInputHelper = null;
 let clientReplySuggestionsPanel = null;
 let clientReplySuggestionsList = null;
 let clientReplyEditorPanel = null;
 let clientReplyEditor = null;
+let clientReplyEditorLabel = null;
 let clientReplyEditorMeta = null;
 
 const defaultInputSource = document.getElementById("defaultInputSource");
@@ -105,7 +110,6 @@ const drawerCloseBtn = document.getElementById("drawerCloseBtn");
 const utilityDrawer = document.getElementById("utilityDrawer");
 const drawerBackdrop = document.getElementById("drawerBackdrop");
 const drawerNotice = document.getElementById("drawerNotice");
-const shortcutStatus = document.getElementById("shortcutStatus");
 
 const minimizeBtn = document.getElementById("minimizeBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -141,6 +145,10 @@ let sourceInitialized = {
 let capturingShortcut = null;
 let currentWritingMode = null;
 
+let conversationHistory = [];
+let committedClientReply = null;
+let clientReplyTurnId = 0;
+let writingRequestId = 0;
 let drawerOpen = false;
 
 let sourceScrollbarDragging = false;
@@ -175,40 +183,23 @@ function showView(name) {
   });
 
   currentView = name;
-  document.querySelectorAll("[data-workspace]").forEach(button => {
-    const active = button.dataset.workspace === name || (button.dataset.workspace === "express" && name === "writingResult");
-    button.setAttribute("aria-current", active ? "page" : "false");
-  });
-  if (workspaceReady && name !== "loading") persistWorkspace();
 
   if (name !== "main") {
     hideNotice();
   }
+}
 
-  const activeElement = document.activeElement;
-  const targetView = views[name];
-  const activeIsVisibleInTarget =
-    targetView?.contains(activeElement) &&
-    activeElement !== document.body &&
-    activeElement.getClientRects().length > 0 &&
-    !activeElement.closest(".hidden");
-
-  if (!activeIsVisibleInTarget) {
-    let initialFocus = null;
-    if (name === "main") initialFocus = sourceText;
-    else if (name === "writingResult") {
-      initialFocus = suggestionCard?.classList.contains("hidden")
-        ? document.getElementById("writingOriginal")
-        : suggestionText;
-    } else if (name === "clientReply") {
-      initialFocus = clientReplyEditorPanel && !clientReplyEditorPanel.classList.contains("hidden")
-        ? clientReplyEditor
-        : clientMessageInput;
-    } else if (name === "understandResult") initialFocus = helpReplyBtn;
-
-    if (initialFocus && !initialFocus.disabled && !initialFocus.closest(".hidden")) {
-      initialFocus.focus({ preventScroll: true });
-    }
+async function requestWriting(payload) {
+  const requestId = ++writingRequestId;
+  try {
+    const response = await window.writingAssistant.improveText(payload);
+    return requestId === writingRequestId
+      ? response || { ok: false, error: "The writing service returned an invalid response." }
+      : null;
+  } catch {
+    return requestId === writingRequestId
+      ? { ok: false, error: "Could not connect to the writing service. Please try again." }
+      : null;
   }
 }
 
@@ -234,24 +225,15 @@ function hideDrawerNotice() {
 }
 
 function setDrawer(open) {
-  const wasOpen = drawerOpen;
-  if (open && !wasOpen) drawerPreviousFocus = document.activeElement;
   drawerOpen = Boolean(open);
 
   utilityDrawer.classList.toggle("open", drawerOpen);
   drawerBackdrop.classList.toggle("open", drawerOpen);
 
   utilityDrawer.setAttribute("aria-hidden", String(!drawerOpen));
-  utilityDrawer.setAttribute("aria-modal", String(drawerOpen));
-  utilityDrawer.inert = !drawerOpen;
-  Array.from(utilityDrawer.parentElement.children).forEach(element => {
-    if (element !== utilityDrawer && element !== drawerBackdrop) element.inert = drawerOpen;
-  });
   drawerBackdrop.setAttribute("aria-hidden", String(!drawerOpen));
 
   drawerToggleBtn.setAttribute("aria-expanded", String(drawerOpen));
-  if (drawerOpen && !wasOpen) requestAnimationFrame(() => drawerCloseBtn.focus());
-  if (!drawerOpen && wasOpen) drawerPreviousFocus?.focus();
 
   if (!drawerOpen) {
     hideDrawerNotice();
@@ -382,7 +364,7 @@ async function refreshInput(source = currentSource) {
   sourceInitialized[source] = true;
 
   if (!result?.ok || !result?.text) {
-    // A failed capture never clears a manually written draft.
+    sourceBuffers[source] = "";
 
     if (source === currentSource) {
       loadCurrentSourceBuffer();
@@ -403,10 +385,6 @@ async function refreshInput(source = currentSource) {
     return false;
   }
 
-  if (sourceBuffers[source]?.trim() && sourceBuffers[source] !== result.text &&
-      !window.confirm("Replace the current Home input with imported text? Your saved writing drafts are kept.")) {
-    loadCurrentSourceBuffer(); return false;
-  }
   sourceBuffers[source] = result.text;
 
   if (source === currentSource) {
@@ -471,6 +449,1131 @@ async function switchSource(source) {
   }
 }
 
+function initializeClientReplyUi() {
+  if (
+    !clientReplyView ||
+    !clientReplyHeading ||
+    !clientReplyContextCard ||
+    !clientReplyInputCard ||
+    !clientReplyComposeActions
+  ) {
+    return;
+  }
+
+  const headingTitle = clientReplyHeading.querySelector("h2");
+  const headingDescription = clientReplyHeading.querySelector("p");
+
+  if (headingTitle) {
+    headingTitle.textContent = "Create the right reply";
+  }
+
+  if (headingDescription) {
+    headingDescription.textContent =
+      "Add what you want to say, or leave it blank and Clarity can draft it.";
+  }
+
+  const contextLabel = clientReplyContextCard.querySelector(".card-label");
+
+  if (contextLabel) {
+    contextLabel.textContent = "CLIENT MESSAGE";
+  }
+
+  const roughLabel = clientReplyInputCard.querySelector(".card-label");
+
+  if (roughLabel) {
+    roughLabel.textContent = "WHAT DO YOU WANT TO SAY?";
+  }
+
+  roughReply.placeholder = CLIENT_REPLY_DEFAULT_PLACEHOLDER;
+
+  clientReplyInputHelper = document.createElement("div");
+  clientReplyInputHelper.className = "client-reply-helper";
+  clientReplyInputHelper.textContent = CLIENT_REPLY_DEFAULT_HELPER;
+
+  roughReply.insertAdjacentElement("afterend", clientReplyInputHelper);
+
+  clientReplyPreferences = document.createElement("section");
+  clientReplyPreferences.className = "client-reply-preferences";
+  clientReplyPreferences.innerHTML = `
+    <div class="client-preference-group">
+      <div class="client-preference-label">TONE</div>
+      <div class="client-segmented" role="group" aria-label="Reply tone">
+        <button type="button" data-client-tone="professional">Professional</button>
+        <button type="button" data-client-tone="friendly">Friendly</button>
+        <button type="button" data-client-tone="firm">Firm</button>
+      </div>
+    </div>
+
+    <div class="client-preference-group">
+      <div class="client-preference-label">LENGTH</div>
+      <div class="client-segmented" role="group" aria-label="Reply length">
+        <button type="button" data-client-length="short">Short</button>
+        <button type="button" data-client-length="normal">Normal</button>
+        <button type="button" data-client-length="detailed">Detailed</button>
+      </div>
+    </div>
+  `;
+
+  clientReplyInputCard.insertAdjacentElement(
+    "afterend",
+    clientReplyPreferences,
+  );
+
+  clientReplyHistoryPanel = document.createElement("section");
+  clientReplyHistoryPanel.className = "result-card client-history-panel hidden";
+
+  clientReplyHistoryPanel.innerHTML = `
+    <div class="card-label">RECENT CONVERSATION</div>
+    <div class="client-history-list"></div>
+  `;
+
+  clientReplyContextCard.insertAdjacentElement(
+    "afterend",
+    clientReplyHistoryPanel,
+  );
+
+  clientReplyHistoryToggle = document.createElement("button");
+  clientReplyHistoryToggle.type = "button";
+  clientReplyHistoryToggle.className = "text-button client-history-toggle";
+  clientReplyHistoryToggle.textContent = "VIEW";
+
+  clearConversationBtn.insertAdjacentElement(
+    "beforebegin",
+    clientReplyHistoryToggle,
+  );
+
+  clientReplyClarificationCard = document.createElement("section");
+  clientReplyClarificationCard.className =
+    "result-card client-clarification-card hidden";
+
+  clientReplyClarificationCard.innerHTML = `
+    <div class="card-label">MORE CONTEXT NEEDED</div>
+
+    <div
+      class="card-text"
+      id="clientReplyClarificationQuestion"
+    ></div>
+  `;
+
+  clientReplyInputCard.insertAdjacentElement(
+    "beforebegin",
+    clientReplyClarificationCard,
+  );
+
+  clientReplyClarificationQuestion = clientReplyClarificationCard.querySelector(
+    "#clientReplyClarificationQuestion",
+  );
+
+  clientReplySuggestionsPanel = document.createElement("section");
+  clientReplySuggestionsPanel.className =
+    "client-reply-stage client-suggestions-stage hidden";
+
+  clientReplySuggestionsPanel.innerHTML = `
+    <div class="client-stage-toolbar">
+      <div>
+        <div class="client-stage-kicker">3 SUGGESTIONS</div>
+        <div class="client-stage-description">
+          Choose the closest reply. You can edit it before copying.
+        </div>
+      </div>
+
+      <button
+        id="clientNewOptionsBtn"
+        class="text-button"
+        type="button"
+      >
+        NEW OPTIONS
+      </button>
+    </div>
+
+    <div
+      class="client-suggestion-list"
+      id="clientSuggestionList"
+      aria-live="polite"
+    ></div>
+
+    <div class="client-stage-actions">
+      <button
+        id="clientSuggestionsBackBtn"
+        class="secondary-action"
+        type="button"
+      >
+        BACK
+      </button>
+    </div>
+  `;
+
+  clientReplyComposeActions.insertAdjacentElement(
+    "beforebegin",
+    clientReplySuggestionsPanel,
+  );
+
+  clientReplySuggestionsList = clientReplySuggestionsPanel.querySelector(
+    "#clientSuggestionList",
+  );
+
+  clientReplyEditorPanel = document.createElement("section");
+  clientReplyEditorPanel.className =
+    "client-reply-stage client-editor-stage hidden";
+
+  clientReplyEditorPanel.innerHTML = `
+    <div class="client-stage-toolbar client-editor-toolbar">
+      <div>
+        <div class="client-stage-kicker">YOUR REPLY</div>
+        <div
+          id="clientReplyEditorLabel"
+          class="client-editor-option-label"
+        >
+          SELECTED OPTION
+        </div>
+      </div>
+
+      <button
+        id="clientEditorNewOptionsBtn"
+        class="text-button"
+        type="button"
+      >
+        NEW OPTIONS
+      </button>
+    </div>
+
+    <div class="client-editor-card">
+      <textarea
+        id="clientReplyEditor"
+        spellcheck="true"
+        aria-label="Editable client reply"
+      ></textarea>
+
+      <div class="client-editor-meta">
+        <span id="clientReplyEditorMeta">
+          Editable — AI actions use the text currently shown here.
+        </span>
+      </div>
+    </div>
+
+    <div class="client-refine-actions" aria-label="Refine reply">
+      <button type="button" data-client-refine="grammar">GRAMMAR</button>
+      <button type="button" data-client-refine="improve">IMPROVE REPLY</button>
+      <button type="button" data-client-refine="shorter">SHORTER</button>
+    </div>
+
+    <div class="client-stage-actions client-editor-actions">
+      <button
+        id="clientEditorBackBtn"
+        class="secondary-action"
+        type="button"
+      >
+        BACK TO OPTIONS
+      </button>
+
+      <button
+        id="clientCopyReplyBtn"
+        class="primary-action"
+        type="button"
+      >
+        COPY REPLY
+      </button>
+
+      <button
+        id="clientNextMessageBtn"
+        class="secondary-action"
+        type="button"
+      >
+        NEXT MESSAGE
+      </button>
+    </div>
+  `;
+
+  clientReplySuggestionsPanel.insertAdjacentElement(
+    "afterend",
+    clientReplyEditorPanel,
+  );
+
+  clientReplyEditor =
+    clientReplyEditorPanel.querySelector("#clientReplyEditor");
+
+  clientReplyEditorLabel = clientReplyEditorPanel.querySelector(
+    "#clientReplyEditorLabel",
+  );
+
+  clientReplyEditorMeta = clientReplyEditorPanel.querySelector(
+    "#clientReplyEditorMeta",
+  );
+
+  createReplyBtn.textContent = "CREATE 3 REPLIES";
+
+  clientReplyPreferences
+    .querySelectorAll("[data-client-tone]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        clientReplyTone = button.dataset.clientTone || "professional";
+        updateClientReplyPreferenceUi();
+      });
+    });
+
+  clientReplyPreferences
+    .querySelectorAll("[data-client-length]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        clientReplyLength = button.dataset.clientLength || "normal";
+        updateClientReplyPreferenceUi();
+      });
+    });
+
+  clientReplyHistoryToggle.addEventListener("click", () => {
+    clientReplyHistoryExpanded = !clientReplyHistoryExpanded;
+    renderClientReplyContext();
+  });
+
+  clientReplySuggestionsPanel
+    .querySelector("#clientNewOptionsBtn")
+    ?.addEventListener("click", () => generateClientReplySuggestions());
+
+  clientReplySuggestionsPanel
+    .querySelector("#clientSuggestionsBackBtn")
+    ?.addEventListener("click", () => setClientReplyStage("compose"));
+
+  clientReplyEditorPanel
+    .querySelector("#clientEditorNewOptionsBtn")
+    ?.addEventListener("click", () => generateClientReplySuggestions());
+
+  clientReplyEditorPanel
+    .querySelector("#clientEditorBackBtn")
+    ?.addEventListener("click", () => setClientReplyStage("suggestions"));
+
+  clientReplyEditorPanel
+    .querySelector("#clientCopyReplyBtn")
+    ?.addEventListener("click", copyClientReplyEditor);
+
+  clientReplyEditorPanel
+    .querySelector("#clientNextMessageBtn")
+    ?.addEventListener("click", () => {
+      commitConversationReply(clientReplyEditor?.value || "");
+      openClientReplyComposer("");
+      clientReplyHistoryExpanded = conversationHistory.length > 0;
+      renderClientReplyContext();
+      requestAnimationFrame(() => clientContext.focus());
+    });
+
+  clientReplyEditorPanel
+    .querySelectorAll("[data-client-refine]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        refineClientReply(button.dataset.clientRefine);
+      });
+    });
+
+  updateClientReplyPreferenceUi();
+  setClientReplyStage("compose");
+}
+
+function updateClientReplyPreferenceUi() {
+  clientReplyPreferences
+    ?.querySelectorAll("[data-client-tone]")
+    .forEach((button) => {
+      const active = button.dataset.clientTone === clientReplyTone;
+
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+
+  clientReplyPreferences
+    ?.querySelectorAll("[data-client-length]")
+    .forEach((button) => {
+      const active = button.dataset.clientLength === clientReplyLength;
+
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+}
+
+function resetClientReplyFieldGuidance() {
+  if (roughReply) {
+    roughReply.placeholder = CLIENT_REPLY_DEFAULT_PLACEHOLDER;
+  }
+
+  if (clientReplyInputHelper) {
+    clientReplyInputHelper.textContent = CLIENT_REPLY_DEFAULT_HELPER;
+  }
+
+  if (createReplyBtn) {
+    createReplyBtn.textContent = "CREATE 3 REPLIES";
+  }
+}
+
+function hideClientReplyClarification({ resetGuidance = true } = {}) {
+  if (clientReplyClarificationCard) {
+    clientReplyClarificationCard.classList.add("hidden");
+  }
+
+  if (clientReplyClarificationQuestion) {
+    clientReplyClarificationQuestion.textContent = "";
+  }
+
+  if (resetGuidance) {
+    resetClientReplyFieldGuidance();
+  }
+}
+
+function showClientReplyClarification({
+  question = "",
+  placeholderExample = "",
+} = {}) {
+  if (!clientReplyClarificationCard) {
+    return;
+  }
+
+  if (clientReplyClarificationQuestion) {
+    clientReplyClarificationQuestion.textContent =
+      String(question || "").trim() ||
+      "Add the missing information so Clarity does not have to guess.";
+  }
+
+  const example =
+    typeof placeholderExample === "string" ? placeholderExample.trim() : "";
+
+  if (roughReply) {
+    roughReply.placeholder =
+      example && /^e\.g\./i.test(example)
+        ? example
+        : example
+          ? `e.g. ${example}`
+          : "Add the missing information here — rough notes are enough.";
+  }
+
+  if (clientReplyInputHelper) {
+    clientReplyInputHelper.textContent =
+      "OPTIONAL · English, Taglish, Tagalog, fragments, or rough notes are okay.";
+  }
+
+  if (createReplyBtn) {
+    createReplyBtn.textContent = "CREATE REPLIES WITH THESE DETAILS";
+  }
+
+  clientReplyClarificationCard.classList.remove("hidden");
+
+  requestAnimationFrame(() => {
+    roughReply?.focus();
+  });
+}
+
+function clientReplyLatestMessage() {
+  return clientContext.value.trim();
+}
+
+function renderClientReplyContext() {
+  updateConversationCount();
+
+  const historyList = clientReplyHistoryPanel?.querySelector(
+    ".client-history-list",
+  );
+
+  if (historyList) {
+    historyList.innerHTML = "";
+
+    conversationHistory.slice(-6).forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "client-history-row";
+
+      const role = document.createElement("span");
+      role.className = "client-history-role";
+      role.textContent = entry.role === "client" ? "CLIENT" : "YOU";
+
+      const text = document.createElement("div");
+      text.className = "client-history-text";
+      text.textContent = entry.text;
+
+      row.append(role, text);
+      historyList.appendChild(row);
+    });
+  }
+
+  const hasHistory = conversationHistory.length > 0;
+
+  if (clientReplyHistoryToggle) {
+    clientReplyHistoryToggle.classList.toggle("hidden", !hasHistory);
+
+    clientReplyHistoryToggle.textContent = clientReplyHistoryExpanded
+      ? "HIDE"
+      : "VIEW";
+  }
+
+  clientReplyHistoryPanel?.classList.toggle(
+    "hidden",
+    !hasHistory || !clientReplyHistoryExpanded,
+  );
+}
+
+function setClientReplyHeading(stage) {
+  const title = clientReplyHeading?.querySelector("h2");
+  const description = clientReplyHeading?.querySelector("p");
+
+  if (!title || !description) {
+    return;
+  }
+
+  if (stage === "suggestions") {
+    title.textContent = "Choose a reply";
+    description.textContent =
+      "Pick the closest option. You can edit it before copying.";
+    return;
+  }
+
+  if (stage === "editor") {
+    title.textContent = "Edit your reply";
+    description.textContent =
+      "Make any changes, then use AI tools or copy when ready.";
+    return;
+  }
+
+  title.textContent = "Create the right reply";
+  description.textContent =
+    "Add what you want to say, or leave it blank and Clarity can draft it.";
+}
+
+function setClientReplyStage(stage) {
+  clientReplyStage = stage;
+
+  const composing = stage === "compose";
+  const choosing = stage === "suggestions";
+  const editing = stage === "editor";
+
+  clientReplyView
+    ?.querySelector(".conversation-strip")
+    ?.classList.toggle("hidden", !composing);
+
+  clientReplyContextCard?.classList.toggle("hidden", !composing);
+  clientReplyInputCard?.classList.toggle("hidden", !composing);
+  clientReplyPreferences?.classList.toggle("hidden", !composing);
+  clientReplyComposeActions?.classList.toggle("hidden", !composing);
+
+  if (!composing) {
+    clientReplyHistoryPanel?.classList.add("hidden");
+    clientReplyClarificationCard?.classList.add("hidden");
+  } else {
+    renderClientReplyContext();
+  }
+
+  clientReplySuggestionsPanel?.classList.toggle("hidden", !choosing);
+
+  clientReplyEditorPanel?.classList.toggle("hidden", !editing);
+
+  setClientReplyHeading(stage);
+
+  if (editing) {
+    requestAnimationFrame(() => {
+      clientReplyEditor?.focus();
+    });
+  } else if (composing) {
+    requestAnimationFrame(() => {
+      roughReply?.focus();
+    });
+  }
+}
+
+function openClientReplyComposer(clientMessage) {
+  writingRequestId += 1;
+  clientReplyTurnId += 1;
+  clientContext.value = String(clientMessage || "").trim();
+  committedClientReply = null;
+  if (clientReplyEditor) clientReplyEditor.value = "";
+
+  clientReplyOriginalIntent = "";
+  clientReplySuggestions = [];
+  clientReplyHistoryExpanded = false;
+
+  roughReply.value = "";
+
+  hideClientReplyClarification();
+  renderClientReplyContext();
+  updateClientReplyPreferenceUi();
+
+  showView("clientReply");
+  setClientReplyStage("compose");
+}
+
+function clientReplyToneLabel() {
+  return (
+    {
+      professional: "Professional",
+      friendly: "Friendly",
+      firm: "Firm",
+    }[clientReplyTone] || "Professional"
+  );
+}
+
+function clientReplyLengthLabel() {
+  return (
+    {
+      short: "Short",
+      normal: "Normal",
+      detailed: "Detailed",
+    }[clientReplyLength] || "Normal"
+  );
+}
+
+function clientReplyVariationProfiles() {
+  if (clientReplyTone === "friendly") {
+    return [
+      {
+        label: "Friendly",
+        description: "Natural, warm, and easy to send.",
+        directive:
+          "Use a friendly, natural, conversational client tone while staying professional.",
+      },
+      {
+        label: "Warm & Professional",
+        description: "Friendly with a little more polish.",
+        directive:
+          "Use a warm professional tone: approachable, polished, and client-safe.",
+      },
+      {
+        label: "Friendly & Direct",
+        description: "Warm but more concise and decisive.",
+        directive:
+          "Use a friendly but direct tone. Be clear and decisive without sounding cold.",
+      },
+    ];
+  }
+
+  if (clientReplyTone === "firm") {
+    return [
+      {
+        label: "Firm & Professional",
+        description: "Clear boundaries without sounding harsh.",
+        directive:
+          "Use a firm professional tone. Set clear expectations without sounding rude or defensive.",
+      },
+      {
+        label: "Firm but Warm",
+        description: "Keeps the boundary with a softer delivery.",
+        directive:
+          "Keep the message firm, but soften the delivery with a respectful and collaborative tone.",
+      },
+      {
+        label: "Direct & Firm",
+        description: "Straight to the point and confident.",
+        directive:
+          "Be direct, confident, and firm. Avoid unnecessary filler while remaining respectful.",
+      },
+    ];
+  }
+
+  return [
+    {
+      label: "Professional",
+      description: "Balanced, polished, and client-safe.",
+      directive:
+        "Use a polished professional tone that feels natural, clear, and client-ready.",
+    },
+    {
+      label: "Warm Professional",
+      description: "Professional with a more human tone.",
+      directive:
+        "Use a professional tone with a little more warmth and conversational flow.",
+    },
+    {
+      label: "Direct Professional",
+      description: "Clearer and more decisive.",
+      directive:
+        "Use a professional, direct tone. Be concise and decisive without sounding abrupt.",
+    },
+  ];
+}
+
+function buildClientReplyAiContext({
+  variationDirective = "",
+  taskDirective = "",
+  forceLength = "",
+} = {}) {
+  const latest = clientReplyLatestMessage();
+
+  const baseContext = buildConversationContext(latest);
+
+  const length = forceLength || clientReplyLengthLabel();
+
+  const instructions = [
+    "CLIENT REPLY PREFERENCES:",
+    `Tone: ${clientReplyToneLabel()}`,
+    `Length: ${length}`,
+    variationDirective ? `Variation: ${variationDirective}` : "",
+    "",
+    "CLIENT REPLY RULES:",
+    "- Reply to the latest client message, using recent conversation only as supporting context.",
+    "- Preserve the user's intent and factual meaning.",
+    "- Do not invent prices, deadlines, promises, completed work, availability, or other facts that are not supported.",
+    "- Keep the reply natural and ready to send.",
+    "- Do not add labels, analysis, explanations, or quotation marks around the reply.",
+    taskDirective ? `- Current task: ${taskDirective}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return `${baseContext}\n\n${instructions}`.trim();
+}
+
+function buildClientReplyOptionsAiContext(profiles) {
+  const latest = clientReplyLatestMessage();
+  const baseContext = buildConversationContext(latest);
+
+  const variationInstructions = profiles
+    .map(
+      (profile, index) =>
+        `${index + 1}. ${profile.label}: ${profile.directive}`,
+    )
+    .join("\n");
+
+  return [
+    baseContext,
+    "",
+    "CLIENT REPLY PREFERENCES:",
+    `Base tone: ${clientReplyToneLabel()}`,
+    `Length: ${clientReplyLengthLabel()}`,
+    "",
+    "CREATE THESE THREE VARIATIONS:",
+    variationInstructions,
+    "",
+    "IMPORTANT:",
+    "- All three replies must preserve the same facts and user intent.",
+    "- Make the wording and delivery meaningfully different.",
+    "- Never invent facts, experience, deadlines, prices, availability, promises, approvals, work status, or completed work.",
+    "- Ask for clarification only when the client's actual question cannot be answered truthfully without an important missing fact or real user decision.",
+    "- Do not block generation for optional enrichment such as exact dates, exact durations, metrics, extra technical detail, or extra outcomes unless the client explicitly requires them.",
+    "- If the user's rough notes support a truthful but slightly general answer, generate the replies instead of asking another question.",
+    "- Preserve uncertainty or ongoing status rather than inventing a completed outcome.",
+  ].join("\n");
+}
+
+function clientReplyRequestText() {
+  const rough = clientReplyOriginalIntent.trim();
+
+  if (rough) {
+    return rough;
+  }
+
+  /*
+    CLIENT REPLY BLANK-INTENT FALLBACK
+
+    The initial options mode can draft from the client message when the user
+    intentionally leaves the rough-response field blank. The actual client
+    message and conversation are also supplied in the context field.
+  */
+  return [
+    "DRAFT MODE — the user has NOT written a rough reply.",
+    "Create reply options from the client message and conversation context.",
+    "Do not treat these instructions as the message to rewrite.",
+    "If a meaningful answer requires missing user-specific facts or a real decision, request clarification instead of inventing them.",
+  ].join("\n");
+}
+
+function normalizeClientReplyResult(response) {
+  const text =
+    typeof response?.result?.text === "string"
+      ? response.result.text.trim()
+      : "";
+
+  return text;
+}
+
+function setClientReplyLoading(title, note) {
+  loadingTitle.textContent = title;
+
+  if (loadingNote) {
+    loadingNote.textContent = note;
+  }
+
+  showView("loading");
+}
+
+function renderClientReplySuggestions() {
+  if (!clientReplySuggestionsList) {
+    return;
+  }
+
+  clientReplySuggestionsList.innerHTML = "";
+
+  clientReplySuggestions.forEach((suggestion, index) => {
+    const card = document.createElement("article");
+    card.className = "client-suggestion-card";
+
+    const top = document.createElement("div");
+    top.className = "client-suggestion-top";
+
+    const identity = document.createElement("div");
+
+    const option = document.createElement("div");
+    option.className = "client-suggestion-option";
+    option.textContent = `0${index + 1} · ${suggestion.label}`;
+
+    const description = document.createElement("div");
+    description.className = "client-suggestion-description";
+    description.textContent = suggestion.description;
+
+    identity.append(option, description);
+
+    const useButton = document.createElement("button");
+    useButton.type = "button";
+    useButton.className = "client-use-button";
+    useButton.textContent = "USE THIS";
+
+    useButton.addEventListener("click", () => {
+      chooseClientReplySuggestion(index);
+    });
+
+    top.append(identity, useButton);
+
+    const preview = document.createElement("div");
+    preview.className = "client-suggestion-preview";
+    preview.textContent = suggestion.text;
+
+    card.append(top, preview);
+    clientReplySuggestionsList.appendChild(card);
+  });
+}
+
+async function generateClientReplySuggestions() {
+  const latest = clientReplyLatestMessage();
+
+  if (!latest) {
+    showNotice(
+      "No client message",
+      "Add or select the client's message first.",
+    );
+
+    setClientReplyStage("compose");
+    return;
+  }
+
+  if (latest.length > 12000) {
+    showNotice("Client message is too long", "Use up to 12,000 characters for the latest message.");
+    return;
+  }
+
+  if (clientReplyStage === "compose") {
+    clientReplyOriginalIntent = roughReply.value.trim();
+  }
+
+  currentWritingMode = "client_reply";
+
+  setClientReplyLoading(
+    "Creating 3 reply options…",
+    `${clientReplyToneLabel()} tone · ${clientReplyLengthLabel()} length`,
+  );
+
+  const profiles = clientReplyVariationProfiles();
+
+  const response = await requestWriting({
+    text: clientReplyRequestText(),
+    context: buildClientReplyOptionsAiContext(profiles),
+    mode: "client_reply_options",
+    explanationLanguage: currentSettings.understandExplanation,
+  });
+
+  if (!response) return;
+
+  if (!response?.ok) {
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    showNotice(
+      "Could not create reply options",
+      response?.error || "Try again in a moment.",
+    );
+
+    return;
+  }
+
+  const result = response.result || {};
+
+  if (result.needsClarification) {
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    showClientReplyClarification({
+      question:
+        result.clarificationQuestion ||
+        "Add the missing information so Clarity does not have to guess.",
+      placeholderExample: result.placeholderExample,
+    });
+
+    return;
+  }
+
+  hideClientReplyClarification();
+
+  const replies = Array.isArray(result.replies) ? result.replies : [];
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const reply of replies) {
+    if (typeof reply !== "string") {
+      continue;
+    }
+
+    const text = reply.trim();
+
+    if (!text) {
+      continue;
+    }
+
+    const key = text.replace(/\s+/g, " ").toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(text);
+  }
+
+  if (unique.length < 3) {
+    hideClientReplyClarification();
+
+    showView("clientReply");
+    setClientReplyStage("compose");
+
+    showNotice(
+      "Could not create all 3 reply options",
+      "The writing service returned fewer than 3 distinct replies. Try again.",
+    );
+
+    return;
+  }
+
+  clientReplySuggestions = unique.slice(0, 3).map((text, index) => ({
+    ...profiles[index],
+    text,
+  }));
+
+  renderClientReplySuggestions();
+
+  showView("clientReply");
+  setClientReplyStage("suggestions");
+}
+
+function chooseClientReplySuggestion(index) {
+  const suggestion = clientReplySuggestions[index];
+
+  if (!suggestion || !clientReplyEditor) {
+    return;
+  }
+
+  currentWritingMode = "client_reply";
+
+  clientReplyEditor.value = suggestion.text;
+
+  if (clientReplyEditorLabel) {
+    clientReplyEditorLabel.textContent = suggestion.label;
+  }
+
+  if (clientReplyEditorMeta) {
+    clientReplyEditorMeta.textContent =
+      "Editable — Grammar and Improve Reply use the text currently shown here.";
+  }
+
+  setClientReplyStage("editor");
+}
+
+async function refineClientReply(kind) {
+  const currentText = clientReplyEditor?.value.trim() || "";
+
+  if (!currentText) {
+    showNotice("Nothing to improve", "Write or choose a reply first.");
+
+    clientReplyEditor?.focus();
+    return;
+  }
+
+  if (kind === "grammar") {
+    setClientReplyLoading(
+      "Checking the grammar…",
+      "Keeping your meaning and wording as close as possible.",
+    );
+
+    const response = await requestWriting({
+      text: currentText,
+      mode: "grammar",
+      explanationLanguage: currentSettings.understandExplanation,
+    });
+
+    if (!response) return;
+
+    showView("clientReply");
+    setClientReplyStage("editor");
+
+    if (!response?.ok) {
+      showNotice(
+        "Could not fix the grammar",
+        response?.error || "Try again in a moment.",
+      );
+      return;
+    }
+
+    const updated = normalizeClientReplyResult(response);
+
+    if (updated) {
+      clientReplyEditor.value = updated;
+    }
+
+    return;
+  }
+
+  const isShorter = kind === "shorter";
+
+  setClientReplyLoading(
+    isShorter ? "Making the reply shorter…" : "Improving your reply…",
+    isShorter
+      ? "Keeping the important meaning while removing extra words."
+      : "Improving clarity, tone, and flow without changing your intent.",
+  );
+
+  const response = await requestWriting({
+    text: currentText,
+    context: buildClientReplyAiContext({
+      forceLength: isShorter ? "Short" : "",
+      taskDirective: isShorter
+        ? "Make the CURRENT REPLY shorter and more concise. Preserve every important fact and commitment. Do not add new information."
+        : "Improve the CURRENT REPLY's clarity, professionalism, tone, and flow. Preserve the user's meaning and do not add unsupported information.",
+    }),
+    mode: "client_reply",
+    explanationLanguage: currentSettings.understandExplanation,
+  });
+
+  if (!response) return;
+
+  showView("clientReply");
+  setClientReplyStage("editor");
+
+  if (!response?.ok) {
+    showNotice(
+      isShorter ? "Could not shorten the reply" : "Could not improve the reply",
+      response?.error || "Try again in a moment.",
+    );
+
+    return;
+  }
+
+  const updated = normalizeClientReplyResult(response);
+
+  if (updated) {
+    clientReplyEditor.value = updated;
+  }
+}
+
+async function copyClientReplyEditor() {
+  const text = clientReplyEditor?.value.trim() || "";
+  const turnId = clientReplyTurnId;
+
+  if (!text) {
+    return;
+  }
+
+  const copied = await copyText(text, document.getElementById("clientCopyReplyBtn"));
+  if (copied && turnId === clientReplyTurnId) {
+    commitConversationReply(text);
+    if (clientReplyEditorMeta) {
+      clientReplyEditorMeta.textContent =
+        "Copied. Choose Next message to continue this conversation here.";
+    }
+  }
+}
+
+async function copyText(text, button) {
+  if (button.disabled) return false;
+  button.disabled = true;
+  try {
+    const copied = await window.writingAssistant.copyResult(text);
+    if (!copied) throw new Error("Copy failed");
+    showNotice("Copied", "Your text is on the clipboard. You can keep working here.");
+    return true;
+  } catch {
+    showNotice("Could not copy", "Your draft is still here. Please try again.");
+    return false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function setLoading(mode) {
+  const states = {
+    express: {
+      title: "Organizing your thoughts…",
+      note: "Creating a clearer version.",
+    },
+
+    understand: {
+      title: "Making this easier to understand…",
+      note: "Analyzing selected text.",
+    },
+
+    client_reply: {
+      title: "Creating reply options…",
+      note: "Building client-ready responses from your message and context.",
+    },
+
+    grammar: {
+      title: "Correcting the English…",
+      note: "Processing selected text.",
+    },
+  };
+
+  const state = states[mode] || {
+    title: "Working on your message…",
+    note: "Processing your text.",
+  };
+
+  loadingTitle.textContent = state.title;
+
+  if (loadingNote) {
+    loadingNote.textContent = state.note;
+  }
+
+  showView("loading");
+}
+
+/*
+  FIRST SCREEN FOR GLOBAL SHORTCUTS
+
+  This view is prepared before the BrowserWindow becomes opaque.
+
+  It replaces:
+    - a blank/black BrowserWindow
+    - the old Home screen
+    - the previous Result screen
+
+  with a deliberate Clarity loading state.
+*/
+function setShortcutCaptureLoading(action, reason) {
+  let title = "Capturing selection…";
+  let note = "Reading text from the active window.";
+
+  if (action === "express") {
+    title = "Reading selected text…";
+    note = "Preparing Express Clearly.";
+  } else if (action === "understand") {
+    title = "Reading selected text…";
+    note = "Preparing Understand This.";
+  } else if (action === "client_reply") {
+    title = "Reading client message…";
+    note = "Preparing Client Reply.";
+  } else if (action === "grammar") {
+    title = "Reading selected text…";
+    note = "Preparing Grammar Only.";
+  } else if (reason === "loading") {
+    title = "Loading clipboard…";
+    note = "Reading copied text.";
+  }
+
+  loadingTitle.textContent = title;
+
+  if (loadingNote) {
+    loadingNote.textContent = note;
+  }
+
+  showView("loading");
+}
+
 /*
   Hide/minimize immediately.
 
@@ -479,13 +1582,11 @@ async function switchSource(source) {
   screen to be painted before revealing the BrowserWindow again.
 */
 async function hideClarityWindow() {
-  persistWorkspace();
-  cancelWritingRequest(true);
+  writingRequestId += 1;
   return window.writingAssistant.hideWindow();
 }
 
 async function minimizeClarityWindow() {
-  persistWorkspace();
   return window.writingAssistant.minimizeWindow();
 }
 
@@ -514,6 +1615,65 @@ function notifyAssistantFrameReady(requestId) {
         });
       });
     });
+}
+
+function resetWritingResult() {
+  intentCard.classList.add("hidden");
+  clarificationCard.classList.add("hidden");
+  suggestionCard.classList.remove("hidden");
+
+  intentSummary.textContent = "";
+  clarificationQuestion.textContent = "";
+  suggestionText.value = "";
+}
+
+function renderWritingResult(mode, result) {
+  resetWritingResult();
+
+  currentWritingMode = mode;
+
+  const labels = {
+    express: ["EXPRESS CLEARLY", "Suggested message"],
+
+    client_reply: ["CLIENT REPLY", "Suggested reply"],
+
+    grammar: ["GRAMMAR ONLY", "Corrected text"],
+  };
+
+  const [eyebrow, title] = labels[mode] || labels.express;
+
+  writingResultEyebrow.textContent = eyebrow;
+  writingResultTitle.textContent = title;
+
+  if (
+    typeof result?.intentSummary === "string" &&
+    result.intentSummary.trim()
+  ) {
+    intentSummary.textContent = result.intentSummary.trim();
+
+    intentCard.classList.remove("hidden");
+  }
+
+  if (result?.needsClarification) {
+    clarificationQuestion.textContent =
+      result.clarificationQuestion?.trim() ||
+      "Please add a little more context so the assistant does not guess your meaning.";
+
+    clarificationCard.classList.remove("hidden");
+  }
+
+  suggestionText.value =
+    typeof result?.text === "string" ? result.text.trim() : "";
+
+  const hasResult = Boolean(suggestionText.value);
+
+  suggestionCard.classList.toggle("hidden", !hasResult);
+
+  copySuggestionBtn.disabled = !hasResult;
+
+  replaceSuggestionBtn.disabled = !hasResult;
+
+  showView("writingResult");
 }
 
 function renderUnderstandResult(result) {
@@ -561,8 +1721,125 @@ function renderUnderstandResult(result) {
   showView("understandResult");
 }
 
+function buildConversationContext(latestClientText) {
+  const recent = conversationHistory.slice(-6);
+  // Reserve room for the latest message and preferences within the API limit.
+  let remaining = Math.max(0, 15000 - latestClientText.length);
+  const included = [];
+  for (const entry of recent.reverse()) {
+    const line = `${entry.role === "client" ? "Client" : "You"}: ${entry.text}`;
+    if (line.length + 1 > remaining) break;
+    included.unshift(line);
+    remaining -= line.length + 1;
+  }
+  const history = included.join("\n");
+
+  return [
+    history ? `RECENT CONVERSATION:\n${history}` : "",
+
+    `LATEST CLIENT MESSAGE:\n${latestClientText}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function updateConversationCount() {
+  conversationCount.textContent = `CONVERSATION CONTEXT · ${conversationHistory.length} MESSAGE${
+    conversationHistory.length === 1 ? "" : "S"
+  }`;
+}
+
+async function runMode(mode) {
+  sourceBuffers[currentSource] = sourceText.value;
+
+  sourceInitialized[currentSource] = true;
+
+  const text = sourceText.value.trim();
+
+  if (!text) {
+    showNotice(
+      "No text to process",
+      "Select, copy, paste, or type some text first.",
+    );
+
+    sourceText.focus();
+
+    return;
+  }
+
+  if (mode === "client_reply") {
+    openClientReplyComposer(text);
+    return;
+  }
+
+  currentWritingMode = mode;
+  setLoading(mode);
+
+  const response = await requestWriting({
+    text,
+    mode,
+
+    explanationLanguage: currentSettings.understandExplanation,
+  });
+
+  if (!response) return;
+
+  if (!response?.ok) {
+    showView("main");
+
+    showNotice(
+      "Could not process the text",
+      response?.error || "Try again in a moment.",
+    );
+
+    return;
+  }
+
+  if (mode === "understand") {
+    renderUnderstandResult(response.result);
+  } else {
+    renderWritingResult(mode, response.result);
+  }
+}
+
+async function createClientReply() {
+  clientReplyOriginalIntent = roughReply.value.trim();
+  await generateClientReplySuggestions();
+}
+
+function commitConversationReply(finalText) {
+  if (currentWritingMode !== "client_reply" || !finalText.trim()) {
+    return;
+  }
+
+  if (committedClientReply && conversationHistory.includes(committedClientReply)) {
+    committedClientReply.text = finalText.trim();
+    renderClientReplyContext();
+    return;
+  }
+
+  const clientText = clientReplyLatestMessage();
+
+  if (clientText) {
+    conversationHistory.push({
+      role: "client",
+      text: clientText,
+    });
+  }
+
+  committedClientReply = {
+    role: "user",
+    text: finalText.trim(),
+  };
+  conversationHistory.push(committedClientReply);
+
+  conversationHistory = conversationHistory.slice(-8);
+
+  renderClientReplyContext();
+}
+
 function displayShortcut(accelerator) {
-  return String(accelerator || "").replace("CommandOrControl", "Ctrl").replaceAll("+", " + ");
+  return accelerator.replace("CommandOrControl", "Ctrl").replaceAll("+", " + ");
 }
 
 function updateSettingsUi() {
@@ -604,18 +1881,8 @@ async function saveSettings(partial) {
   currentSettings = result.settings;
 
   updateSettingsUi();
-  try {
-    renderShortcutStatus(await window.writingAssistant.getShortcutStatus());
-  } catch {}
 
   return true;
-}
-
-function renderShortcutStatus(status) {
-  if (!shortcutStatus) return;
-  const message = String(status?.message || "").trim();
-  shortcutStatus.textContent = message;
-  shortcutStatus.classList.toggle("hidden", !message);
 }
 
 function acceleratorFromEvent(event) {
@@ -776,39 +2043,93 @@ sourceScrollbar?.addEventListener("pointerdown", (event) => {
 window.addEventListener("resize", scheduleSourceScrollbarUpdate);
 
 initializeClientReplyUi();
-initializeWorkspaces();
 
-/* Home is explicit; drafts stay in their workspace. */
-document.querySelectorAll("[data-back]").forEach(button => button.addEventListener("click", () => navigateWorkspace("main")));
+/* Back buttons */
+document.querySelectorAll("[data-back]").forEach((button) => {
+  button.addEventListener("click", () => {
+    writingRequestId += 1;
+    if (currentView === "clientReply" && button.closest("#clientReplyView")) {
+      if (clientReplyStage === "editor") {
+        setClientReplyStage("suggestions");
+        return;
+      }
+
+      if (clientReplyStage === "suggestions") {
+        setClientReplyStage("compose");
+        return;
+      }
+    }
+
+    showView("main");
+  });
+});
+
 createReplyBtn.addEventListener("click", createClientReply);
 
 copySuggestionBtn.addEventListener("click", async () => {
-  cancelWritingRequest(true);
-  const text = suggestionText.value.trim(); if (!text) return;
-  let copied = false; try { copied = await window.writingAssistant.copyResult(text); } catch {}
-  showNotice(copied ? "Copied" : "Could not copy", copied ? "Your draft stays open." : "Your draft is preserved. Try Copy again.");
+  const text = suggestionText.value.trim();
+
+  if (!text) {
+    return;
+  }
+
+  if (await copyText(text, copySuggestionBtn)) commitConversationReply(text);
 });
-let replacingSelection = false;
+
 replaceSuggestionBtn.addEventListener("click", async () => {
-  const text = suggestionText.value.trim(); if (!text || replacingSelection) return;
-  cancelWritingRequest(true); persistWorkspace(); replacingSelection = true; replaceSuggestionBtn.disabled = true;
+  const text = suggestionText.value.trim();
+
+  if (!text) {
+    return;
+  }
+
+  if (replaceSuggestionBtn.disabled) return;
+  replaceSuggestionBtn.disabled = true;
+  let result;
   try {
-    const result = await window.writingAssistant.replaceSelection(text);
-    showNotice(result?.ok ? "Paste shortcut sent" : "Could not replace the selection", result?.ok ? "Your draft is kept open. Check the text in your source app." : result?.error || "Use Copy instead.");
-  } catch { showNotice("Could not replace the selection", "Your draft is preserved. Use Copy instead."); }
-  finally { replacingSelection = false; replaceSuggestionBtn.disabled = false; }
+    result = await window.writingAssistant.replaceSelection(text);
+  } catch {
+    result = { ok: false, error: "Could not paste the text. Use Copy instead." };
+  } finally {
+    replaceSuggestionBtn.disabled = false;
+  }
+
+  if (!result?.ok) {
+    /*
+      Replace failed and Clarity was restored by the main process.
+      Return to the existing result instead of leaving the loading view up.
+    */
+    showView("writingResult");
+
+    showNotice(
+      "Could not replace the selection",
+      result?.error || "Use Copy instead.",
+    );
+
+    return;
+  }
+
+  commitConversationReply(text);
+  showNotice("Pasted", "Your result is still here. Check the text in your source app.");
 });
+
+clientContext.addEventListener("input", () => {
+  clientReplyTurnId += 1;
+  committedClientReply = null;
+});
+
 helpReplyBtn.addEventListener("click", () => {
-  openClientReplyComposer(workspaceState.understanding?.source || sourceText.value.trim());
+  openClientReplyComposer(sourceText.value.trim());
 });
 
 clearConversationBtn.addEventListener("click", () => {
-  if (!window.confirm("Clear the messages and draft in this conversation?")) return;
-  cancelWritingRequest(true); activeThread().turns = Workspace.empty().threads[0].turns;
-  hydrateThread(); persistWorkspace();
+  conversationHistory = [];
+  committedClientReply = null;
+  clientReplyHistoryExpanded = false;
+  renderClientReplyContext();
 });
 
-/* Window and drawer */
+/* Window + drawer */
 drawerToggleBtn.addEventListener("click", () => setDrawer(!drawerOpen));
 
 drawerCloseBtn.addEventListener("click", () => setDrawer(false));
@@ -852,16 +2173,6 @@ document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
 
 /* Keyboard */
 document.addEventListener("keydown", async (event) => {
-  if (event.isComposing || event.keyCode === 229) return;
-
-  if (drawerOpen && event.key === "Tab" && !capturingShortcut) {
-    const items = [...utilityDrawer.querySelectorAll("button:not(:disabled), input, select, textarea, summary")]
-      .filter(element => element.getClientRects().length);
-    const first = items[0], last = items.at(-1);
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    return;
-  }
   if (capturingShortcut) {
     event.preventDefault();
     event.stopPropagation();
@@ -912,9 +2223,21 @@ document.addEventListener("keydown", async (event) => {
       return;
     }
 
-    event.preventDefault();
-    if (requestGate.current) cancelWritingRequest();
-    else await hideClarityWindow();
+    if (currentView === "main") {
+      await hideClarityWindow();
+    } else {
+      writingRequestId += 1;
+      if (currentView === "clientReply" && clientReplyStage === "editor") {
+        setClientReplyStage("suggestions");
+      } else if (currentView === "clientReply" && clientReplyStage === "suggestions") {
+        setClientReplyStage("compose");
+      } else if (currentView === "loading" && currentWritingMode === "client_reply") {
+        showView("clientReply");
+        setClientReplyStage(clientReplyStage);
+      } else {
+        showView("main");
+      }
+    }
 
     return;
   }
@@ -935,7 +2258,6 @@ document.addEventListener("keydown", async (event) => {
 
   if (
     currentView === "main" &&
-    !event.target.closest?.("input, textarea, select, [contenteditable='true']") &&
     event.altKey &&
     !event.ctrlKey &&
     !event.metaKey
@@ -960,20 +2282,424 @@ document.addEventListener("keydown", async (event) => {
 
   if (
     (event.ctrlKey || event.metaKey) &&
-    (event.key === "Enter" || event.code === "NumpadEnter") &&
-    (currentView === "clientReply" || currentView === "writingResult")
+    event.key === "Enter" &&
+    currentView === "clientReply" &&
+    clientReplyStage === "compose"
   ) {
     event.preventDefault();
 
-    if (currentView === "writingResult") {
-      if (event.target.id === "writingFollowup") generateWriting("refine", event.target.value);
-      else generateWriting();
-    } else if (event.target.id === "clientFollowup") refineClientReply("custom");
-    else createClientReply();
+    createClientReply();
   }
 });
 
-window.writingAssistant.onAssistantOpened(handleAssistantOpened);
+/* When a global shortcut opens Clarity */
+window.writingAssistant.onAssistantOpened(async (payload) => {
+  writingRequestId += 1;
+  setDrawer(false);
+
+  currentSettings =
+    payload?.settings ||
+    (await window.writingAssistant.getSettings()) ||
+    structuredClone(DEFAULT_SETTINGS);
+
+  updateSettingsUi();
+
+  currentSource =
+    payload?.source || currentSettings.defaultInputSource || "selected";
+
+  sourceBuffers[currentSource] = payload?.text || "";
+
+  const isTemporaryCapture =
+    payload?.phase === "capture" ||
+    payload?.reason === "capturing" ||
+    payload?.reason === "loading";
+
+  sourceInitialized[currentSource] = !isTemporaryCapture;
+
+  updateSourceTabs();
+  loadCurrentSourceBuffer();
+
+  /*
+    FIRST / HIDDEN FRAME
+
+    Build the exact screen that should be visible BEFORE main.js reveals
+    the native BrowserWindow. After it has painted, notify the main process.
+
+    This is what prevents a cached previous screen or the old "Ready…"
+    frame from flashing when the window moves to another monitor.
+  */
+  if (payload?.phase === "capture") {
+    /*
+      Always use the dedicated loading view for the first shortcut frame.
+
+      Normal Open Assistant:
+        Capturing selection… / Loading clipboard…
+
+      Quick Grammar:
+        Reading selected text… / Preparing Grammar Only.
+
+      Quick Understand:
+        Reading selected text… / Preparing Understand This.
+
+      main.js keeps the native window fully transparent until the renderer
+      confirms that this state has painted.
+    */
+    hideNotice();
+
+    setShortcutCaptureLoading(payload?.action || null, payload?.reason || null);
+
+    notifyAssistantFrameReady(payload.requestId);
+    return;
+  }
+
+  /*
+    FINAL quick-action payload.
+
+    Go directly from the already-visible shortcut loading screen into the
+    requested operation. Never route through the home screen first.
+  */
+  if (payload?.action && sourceText.value.trim()) {
+    hideNotice();
+    runMode(payload.action);
+    return;
+  }
+
+  if (payload?.action && !sourceText.value.trim()) {
+    /*
+      V7.5.8 QUICK-ACTION FAILURE UX
+
+      Never make a failed quick-action capture look like
+      the user opened the normal assistant.
+
+      Stay on the dedicated quick-action screen and explain what happened.
+      This keeps shortcut intent intact even if Windows does not return a
+      selected-text copy.
+    */
+    hideNotice();
+
+    setShortcutCaptureLoading(payload.action, "capturing");
+
+    loadingTitle.textContent = "Couldn’t capture selected text.";
+
+    if (loadingNote) {
+      const retryMessages = {
+        express: "Keep the text highlighted, then use Quick Express again.",
+        understand:
+          "Keep the text highlighted, then use Quick Understand again.",
+        client_reply:
+          "Keep the client message highlighted, then use Quick Client Reply again.",
+        grammar: "Keep the text highlighted, then use Quick Grammar again.",
+      };
+
+      loadingNote.textContent =
+        retryMessages[payload.action] ||
+        "Keep the text highlighted, then try the quick action again.";
+    }
+
+    return;
+  }
+
+  /*
+    Normal Open Assistant final state.
+  */
+  showView("main");
+
+  if (!payload?.captured && currentSource === "selected") {
+    showNotice(
+      "No text selected",
+      "Highlight text in the source app and press Ctrl+R, or enter text manually.",
+    );
+
+    return;
+  }
+
+  if (!payload?.captured && currentSource === "clipboard") {
+    showNotice(
+      "Clipboard is empty",
+      "Copy text in another app and press Ctrl+R, or enter text manually.",
+    );
+
+    return;
+  }
+
+  hideNotice();
+});
+
+/* =========================================================
+   REUSABLE CUSTOM VERTICAL SCROLLBARS
+   Uses the exact same track/thumb classes as the source input.
+   Native Windows/Chromium scrollbars are hidden, so there are
+   no arrow buttons anywhere these custom scrollbars are used.
+   ========================================================= */
+
+const customScrollbarTargets = [
+  ".drawer-scroll",
+  ".result-scroll",
+  ".context-text",
+  ".suggestion-card textarea",
+  ".reply-card textarea",
+];
+
+const customScrollbarInstances = new Map();
+
+function scheduleAllCustomScrollbarUpdates() {
+  if (scheduleAllCustomScrollbarUpdates.pending) {
+    return;
+  }
+
+  scheduleAllCustomScrollbarUpdates.pending = true;
+
+  requestAnimationFrame(() => {
+    scheduleAllCustomScrollbarUpdates.pending = false;
+
+    for (const instance of customScrollbarInstances.values()) {
+      instance.update();
+    }
+  });
+}
+
+scheduleAllCustomScrollbarUpdates.pending = false;
+
+function isCustomScrollbarTargetVisible(element) {
+  const rect = element.getBoundingClientRect();
+  const style = window.getComputedStyle(element);
+
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.right > 0 &&
+    rect.left < window.innerWidth &&
+    rect.bottom > 0 &&
+    rect.top < window.innerHeight
+  );
+}
+
+function attachCustomVerticalScrollbar(scrollElement) {
+  if (!scrollElement || customScrollbarInstances.has(scrollElement)) {
+    return;
+  }
+
+  scrollElement.classList.add("clarity-custom-scroll-target");
+
+  const scrollbar = document.createElement("div");
+  scrollbar.className = "source-scrollbar clarity-global-scrollbar";
+  scrollbar.setAttribute("aria-hidden", "true");
+
+  const thumb = document.createElement("div");
+  thumb.className = "source-scroll-thumb";
+
+  scrollbar.appendChild(thumb);
+  document.body.appendChild(scrollbar);
+
+  let dragging = false;
+  let pointerId = null;
+  let dragStartY = 0;
+  let dragStartScrollTop = 0;
+
+  const update = () => {
+    if (!document.body.contains(scrollElement)) {
+      scrollbar.remove();
+      customScrollbarInstances.delete(scrollElement);
+      return;
+    }
+
+    const clientHeight = scrollElement.clientHeight;
+    const scrollHeight = scrollElement.scrollHeight;
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+
+    if (!isCustomScrollbarTargetVisible(scrollElement) || maxScrollTop <= 1) {
+      scrollbar.classList.remove("visible");
+      return;
+    }
+
+    const rect = scrollElement.getBoundingClientRect();
+
+    const inset = 4;
+    const scrollbarWidth = 8;
+
+    scrollbar.style.top = `${Math.round(rect.top + inset)}px`;
+
+    scrollbar.style.left = `${Math.round(rect.right - inset - scrollbarWidth)}px`;
+
+    scrollbar.style.height = `${Math.max(
+      0,
+      Math.round(rect.height - inset * 2),
+    )}px`;
+
+    scrollbar.classList.add("visible");
+
+    const trackHeight = scrollbar.clientHeight;
+    const minimumThumbHeight = 34;
+
+    const calculatedThumbHeight = trackHeight * (clientHeight / scrollHeight);
+
+    const thumbHeight = Math.min(
+      trackHeight,
+      Math.max(minimumThumbHeight, calculatedThumbHeight),
+    );
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const thumbTop =
+      maxScrollTop > 0
+        ? (scrollElement.scrollTop / maxScrollTop) * maxThumbTop
+        : 0;
+
+    thumb.style.height = `${thumbHeight}px`;
+
+    thumb.style.transform = `translateX(-50%) translateY(${thumbTop}px)`;
+  };
+
+  const stopDragging = (event) => {
+    if (!dragging) {
+      return;
+    }
+
+    dragging = false;
+    thumb.classList.remove("dragging");
+
+    if (pointerId !== null && thumb.hasPointerCapture?.(pointerId)) {
+      try {
+        thumb.releasePointerCapture(pointerId);
+      } catch {}
+    }
+
+    pointerId = null;
+    event?.preventDefault?.();
+  };
+
+  scrollElement.addEventListener("scroll", update, { passive: true });
+
+  scrollElement.addEventListener("input", scheduleAllCustomScrollbarUpdates);
+
+  thumb.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    dragging = true;
+    pointerId = event.pointerId;
+    dragStartY = event.clientY;
+    dragStartScrollTop = scrollElement.scrollTop;
+
+    thumb.classList.add("dragging");
+
+    try {
+      thumb.setPointerCapture(event.pointerId);
+    } catch {}
+  });
+
+  thumb.addEventListener("pointermove", (event) => {
+    if (!dragging || event.pointerId !== pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const trackHeight = scrollbar.clientHeight;
+
+    const thumbHeight = thumb.offsetHeight;
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const maxScrollTop = Math.max(
+      0,
+      scrollElement.scrollHeight - scrollElement.clientHeight,
+    );
+
+    if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+      return;
+    }
+
+    const deltaY = event.clientY - dragStartY;
+
+    scrollElement.scrollTop =
+      dragStartScrollTop + deltaY * (maxScrollTop / maxThumbTop);
+  });
+
+  thumb.addEventListener("pointerup", stopDragging);
+
+  thumb.addEventListener("pointercancel", stopDragging);
+
+  scrollbar.addEventListener("pointerdown", (event) => {
+    if (event.target === thumb || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const rect = scrollbar.getBoundingClientRect();
+
+    const thumbHeight = thumb.offsetHeight;
+
+    const trackHeight = scrollbar.clientHeight;
+
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+
+    const maxScrollTop = Math.max(
+      0,
+      scrollElement.scrollHeight - scrollElement.clientHeight,
+    );
+
+    if (maxThumbTop <= 0 || maxScrollTop <= 0) {
+      return;
+    }
+
+    const desiredThumbTop = Math.max(
+      0,
+      Math.min(maxThumbTop, event.clientY - rect.top - thumbHeight / 2),
+    );
+
+    scrollElement.scrollTop = (desiredThumbTop / maxThumbTop) * maxScrollTop;
+
+    update();
+  });
+
+  const resizeObserver = new ResizeObserver(update);
+
+  resizeObserver.observe(scrollElement);
+
+  customScrollbarInstances.set(scrollElement, {
+    scrollbar,
+    thumb,
+    update,
+    resizeObserver,
+  });
+
+  update();
+}
+
+function initializeCustomVerticalScrollbars() {
+  document
+    .querySelectorAll(customScrollbarTargets.join(","))
+    .forEach((element) => {
+      attachCustomVerticalScrollbar(element);
+    });
+
+  scheduleAllCustomScrollbarUpdates();
+}
+
+window.addEventListener("resize", scheduleAllCustomScrollbarUpdates);
+
+document.addEventListener("transitionend", scheduleAllCustomScrollbarUpdates);
+
+const customScrollbarMutationObserver = new MutationObserver(() => {
+  initializeCustomVerticalScrollbars();
+});
+
+customScrollbarMutationObserver.observe(document.body, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: ["class"],
+});
+
+initializeCustomVerticalScrollbars();
 
 /* Initial renderer state */
 (async () => {
@@ -982,11 +2708,6 @@ window.writingAssistant.onAssistantOpened(handleAssistantOpened);
     structuredClone(DEFAULT_SETTINGS);
 
   updateSettingsUi();
-  try {
-    const status = await window.writingAssistant.getShortcutStatus();
-    renderShortcutStatus(status);
-    if (status?.message) showNotice("Check your keyboard shortcuts", status.message);
-  } catch {}
   await loadAppInfo();
   updateCharCount();
   updateConversationCount();

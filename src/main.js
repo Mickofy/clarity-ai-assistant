@@ -13,26 +13,12 @@ const { Blob } = require("buffer");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { createPasteSession } = require("./paste-session");
 
-const { createWritingService } = require("./writing-service");
-const { pasteAndResume } = require("./window-actions");
-const {
-  DEFAULT_WINDOW_SIZE,
-  clampWindowSize,
-  createWindowSizeStore,
-} = require("./window-size");
-const { registerShortcutSet } = require("./shortcut-registry");
 let mainWindow = null;
-let preferredWindowSize = { ...DEFAULT_WINDOW_SIZE };
 let lastExternalWindowHandle = null;
 let assistantOpenRequestId = 0;
-let shortcutRegistrationStatus = { ok: true, message: "" };
 const assistantFrameWaiters = new Map();
-
-const windowSizeStore = createWindowSizeStore({
-  read: readWindowSizeFile,
-  write: writeWindowSizeFile,
-});
 
 /*
   V7.5.2 RENDERER READY CACHE
@@ -54,7 +40,9 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 const WRITING_API_URL = (process.env.WRITING_API_URL || "").replace(/\/+$/, "");
 const WRITING_APP_TOKEN = process.env.WRITING_APP_TOKEN || "";
-const writingService = createWritingService({ url: WRITING_API_URL, token: WRITING_APP_TOKEN, getLanguage: () => settings?.understandExplanation || "simple_english" });
+
+const WINDOW_WIDTH = 860;
+const WINDOW_HEIGHT = 760;
 
 const SHORTCUT_DEFAULTS_VERSION = 2;
 
@@ -124,20 +112,6 @@ function cancelAssistantFrameWaiters() {
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
-}
-
-function windowSizePath() {
-  return path.join(app.getPath("userData"), "window-size.json");
-}
-
-function readWindowSizeFile() {
-  return JSON.parse(fs.readFileSync(windowSizePath(), "utf8"));
-}
-
-function writeWindowSizeFile(size) {
-  const filePath = windowSizePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(size, null, 2), "utf8");
 }
 
 function loadSettings() {
@@ -352,18 +326,18 @@ function shortcutAcceleratorForAction(action = null) {
 }
 
 function createWindow(initialBounds = null) {
-  initialBounds ||= getCursorWindowPlacement().bounds;
-  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const options = {
-    width: initialBounds?.width || preferredWindowSize.width,
-    height: initialBounds?.height || preferredWindowSize.height,
-    minWidth: Math.min(680, Math.max(1, workArea.width - 40)),
-    minHeight: Math.min(580, Math.max(1, workArea.height - 40)),
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+    minWidth: WINDOW_WIDTH,
+    maxWidth: WINDOW_WIDTH,
+    minHeight: WINDOW_HEIGHT,
+    maxHeight: WINDOW_HEIGHT,
     icon: path.join(__dirname, "..", "build", "icon.ico"),
     show: false,
     frame: false,
-    resizable: true,
-    maximizable: true,
+    resizable: false,
+    maximizable: false,
     minimizable: true,
     movable: true,
     alwaysOnTop: true,
@@ -439,14 +413,6 @@ function createWindow(initialBounds = null) {
     }, 120);
   });
 
-  const rendererOwner = windowRef.webContents.id;
-  windowRef.webContents.on("destroyed", () => writingService.cancelOwner(rendererOwner));
-  windowRef.on("resize", () => {
-    if (!windowRef.isMaximized() && !windowRef.isDestroyed()) {
-      const { width, height } = windowRef.getBounds();
-      preferredWindowSize = windowSizeStore.set({ width, height });
-    }
-  });
   windowRef.on("closed", () => {
     if (mainWindow === windowRef) {
       mainWindow = null;
@@ -475,17 +441,24 @@ function getCursorWindowPlacement() {
   const area = display.workArea;
   const margin = 20;
 
-  const { width, height } = clampWindowSize(preferredWindowSize, area, margin);
-  let x = Math.round(area.x + (area.width - width) / 2);
-  let y = Math.round(area.y + (area.height - height) / 2);
+  let x = Math.round(area.x + (area.width - WINDOW_WIDTH) / 2);
+  let y = Math.round(area.y + (area.height - WINDOW_HEIGHT) / 2);
+
+  if (WINDOW_WIDTH > area.width - margin * 2) {
+    x = area.x + margin;
+  }
+
+  if (WINDOW_HEIGHT > area.height - margin * 2) {
+    y = area.y + margin;
+  }
 
   return {
     display,
     bounds: {
       x,
       y,
-      width,
-      height,
+      width: WINDOW_WIDTH,
+      height: WINDOW_HEIGHT,
     },
   };
 }
@@ -4417,6 +4390,8 @@ async function showAssistant(action = null) {
 }
 
 function registerCurrentShortcuts(candidateSettings) {
+  globalShortcut.unregisterAll();
+
   const shortcuts = candidateSettings.shortcuts;
   const entries = [
     ["Open Assistant", shortcuts.openAssistant, () => showAssistant(null)],
@@ -4434,13 +4409,134 @@ function registerCurrentShortcuts(candidateSettings) {
     ["Quick Grammar", shortcuts.quickGrammar, () => showAssistant("grammar")],
   ];
 
-  const result = registerShortcutSet(globalShortcut, entries);
-  shortcutRegistrationStatus = result.ok
-    ? { ok: true, message: "" }
-    : { ok: false, message: result.error };
-  return result;
+  const values = entries.map(([, value]) => value);
+
+  if (values.some((value) => !value)) {
+    return { ok: false, error: "All five global shortcuts are required." };
+  }
+
+  if (new Set(values).size !== values.length) {
+    return {
+      ok: false,
+      error: "Global shortcuts must use different key combinations.",
+    };
+  }
+
+  for (const [label, accelerator, callback] of entries) {
+    const registered = globalShortcut.register(accelerator, callback);
+
+    if (!registered) {
+      globalShortcut.unregisterAll();
+      return {
+        ok: false,
+        error: `Could not register ${label}: ${accelerator}. Another application may already be using it.`,
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
+async function callWritingApi(payload) {
+  if (!WRITING_API_URL) {
+    return { ok: false, error: "WRITING_API_URL is not configured." };
+  }
+
+  if (!WRITING_APP_TOKEN) {
+    return { ok: false, error: "WRITING_APP_TOKEN is not configured." };
+  }
+
+  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+  const context =
+    typeof payload?.context === "string" ? payload.context.trim() : "";
+  const mode = typeof payload?.mode === "string" ? payload.mode : "express";
+
+  if (!text) {
+    return {
+      ok: false,
+      error:
+        mode === "client_reply"
+          ? "Write a rough reply first."
+          : "No text was provided.",
+    };
+  }
+
+  if (text.length > 12000) {
+    return { ok: false, error: "Maximum input is 12,000 characters." };
+  }
+
+  if (context.length > 20000) {
+    return { ok: false, error: "Conversation context is too long." };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(`${WRITING_API_URL}/improve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${WRITING_APP_TOKEN}`,
+      },
+      body: JSON.stringify({
+        text,
+        context,
+        mode,
+        explanationLanguage:
+          payload?.explanationLanguage ||
+          settings.understandExplanation ||
+          "simple_english",
+      }),
+      signal: controller.signal,
+    });
+
+    let data;
+
+    try {
+      data = await response.json();
+    } catch {
+      return {
+        ok: false,
+        error: "The writing service returned an invalid response.",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data?.error || "The writing service is unavailable.",
+      };
+    }
+
+    if (!data?.ok || !data?.result) {
+      return {
+        ok: false,
+        error: "The writing service returned an invalid result.",
+      };
+    }
+
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return {
+        ok: false,
+        error: "The request took too long. Please try again.",
+      };
+    }
+
+    return { ok: false, error: "Could not connect to the writing service." };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const pasteSelectionAndKeepOpen = createPasteSession({
+  getWindow: () => mainWindow,
+  getOpenRequestId: () => assistantOpenRequestId,
+  paste: replaceSelection,
+  delay,
+});
 
 if (gotSingleInstanceLock) {
   app.on("second-instance", () => {
@@ -4468,7 +4564,6 @@ if (gotSingleInstanceLock) {
       app.setAppUserModelId("com.clarityaiassistant.desktop");
     }
     settings = loadSettings();
-    preferredWindowSize = windowSizeStore.load();
 
     /*
       Warm the persistent selected-text helper in the background.
@@ -4506,22 +4601,9 @@ if (gotSingleInstanceLock) {
     let registration = registerCurrentShortcuts(settings);
 
     if (!registration.ok) {
-      const savedShortcutError = registration.error;
       console.warn(registration.error);
       settings = structuredClone(DEFAULT_SETTINGS);
       registration = registerCurrentShortcuts(settings);
-
-      shortcutRegistrationStatus = registration.ok
-        ? {
-            ok: true,
-            message:
-              "A saved keyboard shortcut could not be registered, so Clarity restored the defaults. If a shortcut still fails, choose a different combination in Shortcuts & Settings.",
-          }
-        : {
-            ok: false,
-            message: `${savedShortcutError} The default shortcuts also failed to register. Open Shortcuts & Settings and choose different combinations.`,
-          };
-      console.warn(shortcutRegistrationStatus.message);
     }
 
     ipcMain.on("assistant-frame-ready", (_event, requestId) => {
@@ -4550,12 +4632,7 @@ if (gotSingleInstanceLock) {
     });
 
     ipcMain.handle("replace-selection", async (_event, value) => {
-      return pasteAndResume(value, {
-        replace: replaceSelection,
-        getWindow: () => mainWindow,
-        getGeneration: () => assistantOpenRequestId,
-        wait: delay,
-      });
+      return pasteSelectionAndKeepOpen(value);
     });
 
     ipcMain.handle("hide-window", () => {
@@ -4590,16 +4667,11 @@ if (gotSingleInstanceLock) {
       return true;
     });
 
-    ipcMain.handle("improve-text", async (event, payload) => writingService.run(payload, event.sender.id));
-    ipcMain.handle("cancel-writing-request", (event, requestId) => writingService.cancel(requestId, event.sender.id));
-    ipcMain.handle("toggle-maximize-window", () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return false;
-      if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
-      return true;
+    ipcMain.handle("improve-text", async (_event, payload) => {
+      return callWritingApi(payload);
     });
 
     ipcMain.handle("get-settings", () => settings);
-    ipcMain.handle("get-shortcut-status", () => shortcutRegistrationStatus);
 
     ipcMain.handle("get-app-info", () => {
       return {
@@ -4660,7 +4732,6 @@ if (gotSingleInstanceLock) {
 }
 
 app.on("will-quit", () => {
-  windowSizeStore.flush();
   stopPasteHelper();
   stopCaptureHelper();
   globalShortcut.unregisterAll();
