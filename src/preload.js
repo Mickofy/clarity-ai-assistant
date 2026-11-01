@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("writingAssistant", {
 
   getSettings: () => ipcRenderer.invoke("get-settings"),
 
+  getShortcutStatus: () => ipcRenderer.invoke("get-shortcut-status"),
+
   saveSettings: (settings) => ipcRenderer.invoke("save-settings", settings),
 
   getAppInfo: () => ipcRenderer.invoke("get-app-info"),

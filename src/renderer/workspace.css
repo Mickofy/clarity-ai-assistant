@@ -106,6 +106,7 @@ summary + * { margin-top: 12px; }
 .utility-drawer { width: min(440px, 95vw); }
 .shortcut-row, .key-row, .setting-row, .setting-note, .about-row { font-size: 13px; }
 .shortcut-capture { font-size: 12px; }
+.shortcut-status { margin: 10px 0; padding: 10px 12px; border: 1px solid #8a7138; border-radius: 7px; background: #2b2518; color: #f2d28e; font-size: 13px; line-height: 1.5; }
 .drawer-title { font-size: 21px; }
 .setting-row { flex-wrap: wrap; gap: 8px; }
 .setting-row select { max-width: 210px; }

@@ -23,6 +23,11 @@
   Normal reopening resumes the current screen; new captured text is offered as
   an import. Explicit quick shortcuts process their new input without overwriting
   the Home scratchpad.
+- The window remembers its last non-maximized size between launches and clamps
+  that size to the current monitor. Switching views moves keyboard focus into
+  the visible workspace; Alt + 1–4 navigation does not interrupt text fields.
+- IME composition keystrokes are ignored by app shortcuts. If Windows cannot
+  register a global shortcut, Clarity reports the conflict in Shortcuts & Settings.
 - The dark visual identity is retained with a reading font for body text, larger
   controls, native scrollbars, a resizable window, reduced-motion support, and
   keyboard focus management in Settings.

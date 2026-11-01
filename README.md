@@ -151,7 +151,9 @@ For reliability:
 The small additional delay during a cross-monitor switch is intentional.
 
 Drafts are saved locally as you edit, so recreating the window can restore the
-workspace. The window can be resized or expanded for longer writing.
+workspace. The window can be resized or expanded for longer writing. Clarity
+remembers the last non-maximized size across launches and fits it to the current
+monitor when needed.
 
 ---
 

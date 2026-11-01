@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("writingAssistant", {
   getSettings: () => ipcRenderer.invoke("test-settings"),
+  getShortcutStatus: () => ipcRenderer.invoke("test-shortcut-status"),
   getAppInfo: async () => ({ version: "test", developer: "Mickofy" }),
   saveSettings: async settings => ({ ok: true, settings }),
   refreshInput: async () => ({ ok: false, text: "" }),

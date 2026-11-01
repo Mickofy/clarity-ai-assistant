@@ -7,9 +7,11 @@ app.setPath("userData", process.argv[2]);
 app.on("window-all-closed", () => {});
 let win, hideCount = 0, copySuccess = true, deferred = null, deferNext = false;
 const requests = [], cancellations = [], errors = [];
+const shortcutStatus = { ok: false, message: "A shortcut is already in use. Choose another combination in Settings." };
 let nextResponse = { ok: true, result: { text: "A clearer draft.", intentSummary: "Clear meaning." } };
 const settings = { shortcuts: { openAssistant: "CommandOrControl+Alt+Q", quickExpress: "CommandOrControl+Alt+W", quickUnderstand: "CommandOrControl+Alt+E", quickClientReply: "CommandOrControl+Alt+R", quickGrammar: "CommandOrControl+Alt+T" }, defaultInputSource: "selected", understandExplanation: "simple_english" };
 ipcMain.handle("test-settings", () => settings);
+ipcMain.handle("test-shortcut-status", () => shortcutStatus);
 ipcMain.handle("test-improve", (_event, payload) => {
   requests.push(payload);
   if (deferNext) { deferNext = false; return new Promise(resolve => { deferred = resolve; }); }
@@ -49,6 +51,23 @@ app.whenReady().then(async () => {
     });
     await win.loadFile(path.resolve("src/renderer/index.html"));
     await until(() => workspaceReady);
+    assert.equal(await evaluate(() => document.getElementById("shortcutStatus").textContent), shortcutStatus.message);
+    await evaluate(() => {
+      sourceText.focus();
+      sourceText.dispatchEvent(new KeyboardEvent("keydown", { key: "1", altKey: true, bubbles: true, cancelable: true }));
+    });
+    assert.equal(await evaluate(() => currentView), "main");
+    await evaluate(() => {
+      const button = document.getElementById("refreshBtn");
+      button.focus();
+      button.dispatchEvent(new KeyboardEvent("keydown", { key: "1", altKey: true, bubbles: true, cancelable: true }));
+    });
+    await until(() => currentView === "writingResult" && document.activeElement.id === "writingOriginal");
+    await evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })));
+    assert.equal(await evaluate(() => currentView), "writingResult");
+    assert.equal(hideCount, 0);
+    await click("[data-back]");
+    assert.equal(await evaluate(() => document.activeElement.id), "sourceText");
     await click('[data-workspace="express"]');
     await set("writingOriginal", "inspect muna. maybe script causing issue. plan only, don't change files");
     await set("writingPurpose", "prompt", "change");
@@ -59,7 +78,10 @@ app.whenReady().then(async () => {
     await set("suggestionText", "My manually edited prompt. Do not change files.");
     await set("writingFollowup", "Make it more direct.");
     nextResponse = { ok: true, result: { text: "Inspect first. Do not change files.", needsClarification: false } };
-    await click("#refineWritingBtn"); await done();
+    await evaluate(() => {
+      const event = new KeyboardEvent("keydown", { key: "Enter", code: "NumpadEnter", ctrlKey: true, bubbles: true, cancelable: true });
+      document.getElementById("writingFollowup").dispatchEvent(event);
+    }); await done();
     assert.equal(requests.at(-1).operation, "refine");
     assert.match(requests.at(-1).context, /maybe script causing issue/);
     await click("#undoWritingBtn");

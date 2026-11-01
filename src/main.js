@@ -16,11 +16,23 @@ const path = require("path");
 
 const { createWritingService } = require("./writing-service");
 const { pasteAndResume } = require("./window-actions");
+const {
+  DEFAULT_WINDOW_SIZE,
+  clampWindowSize,
+  createWindowSizeStore,
+} = require("./window-size");
+const { registerShortcutSet } = require("./shortcut-registry");
 let mainWindow = null;
-let preferredWindowSize = { width: 860, height: 760 };
+let preferredWindowSize = { ...DEFAULT_WINDOW_SIZE };
 let lastExternalWindowHandle = null;
 let assistantOpenRequestId = 0;
+let shortcutRegistrationStatus = { ok: true, message: "" };
 const assistantFrameWaiters = new Map();
+
+const windowSizeStore = createWindowSizeStore({
+  read: readWindowSizeFile,
+  write: writeWindowSizeFile,
+});
 
 /*
   V7.5.2 RENDERER READY CACHE
@@ -43,9 +55,6 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const WRITING_API_URL = (process.env.WRITING_API_URL || "").replace(/\/+$/, "");
 const WRITING_APP_TOKEN = process.env.WRITING_APP_TOKEN || "";
 const writingService = createWritingService({ url: WRITING_API_URL, token: WRITING_APP_TOKEN, getLanguage: () => settings?.understandExplanation || "simple_english" });
-
-const WINDOW_WIDTH = 860;
-const WINDOW_HEIGHT = 760;
 
 const SHORTCUT_DEFAULTS_VERSION = 2;
 
@@ -115,6 +124,20 @@ function cancelAssistantFrameWaiters() {
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
+}
+
+function windowSizePath() {
+  return path.join(app.getPath("userData"), "window-size.json");
+}
+
+function readWindowSizeFile() {
+  return JSON.parse(fs.readFileSync(windowSizePath(), "utf8"));
+}
+
+function writeWindowSizeFile(size) {
+  const filePath = windowSizePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(size, null, 2), "utf8");
 }
 
 function loadSettings() {
@@ -330,11 +353,12 @@ function shortcutAcceleratorForAction(action = null) {
 
 function createWindow(initialBounds = null) {
   initialBounds ||= getCursorWindowPlacement().bounds;
+  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const options = {
     width: initialBounds?.width || preferredWindowSize.width,
     height: initialBounds?.height || preferredWindowSize.height,
-    minWidth: Math.min(680, screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea.width - 40),
-    minHeight: Math.min(580, screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea.height - 40),
+    minWidth: Math.min(680, Math.max(1, workArea.width - 40)),
+    minHeight: Math.min(580, Math.max(1, workArea.height - 40)),
     icon: path.join(__dirname, "..", "build", "icon.ico"),
     show: false,
     frame: false,
@@ -420,7 +444,7 @@ function createWindow(initialBounds = null) {
   windowRef.on("resize", () => {
     if (!windowRef.isMaximized() && !windowRef.isDestroyed()) {
       const { width, height } = windowRef.getBounds();
-      preferredWindowSize = { width, height };
+      preferredWindowSize = windowSizeStore.set({ width, height });
     }
   });
   windowRef.on("closed", () => {
@@ -451,18 +475,9 @@ function getCursorWindowPlacement() {
   const area = display.workArea;
   const margin = 20;
 
-  const width = Math.min(preferredWindowSize.width, area.width - margin * 2);
-  const height = Math.min(preferredWindowSize.height, area.height - margin * 2);
+  const { width, height } = clampWindowSize(preferredWindowSize, area, margin);
   let x = Math.round(area.x + (area.width - width) / 2);
   let y = Math.round(area.y + (area.height - height) / 2);
-
-  if (WINDOW_WIDTH > area.width - margin * 2) {
-    x = area.x + margin;
-  }
-
-  if (WINDOW_HEIGHT > area.height - margin * 2) {
-    y = area.y + margin;
-  }
 
   return {
     display,
@@ -4402,8 +4417,6 @@ async function showAssistant(action = null) {
 }
 
 function registerCurrentShortcuts(candidateSettings) {
-  globalShortcut.unregisterAll();
-
   const shortcuts = candidateSettings.shortcuts;
   const entries = [
     ["Open Assistant", shortcuts.openAssistant, () => showAssistant(null)],
@@ -4421,32 +4434,11 @@ function registerCurrentShortcuts(candidateSettings) {
     ["Quick Grammar", shortcuts.quickGrammar, () => showAssistant("grammar")],
   ];
 
-  const values = entries.map(([, value]) => value);
-
-  if (values.some((value) => !value)) {
-    return { ok: false, error: "All five global shortcuts are required." };
-  }
-
-  if (new Set(values).size !== values.length) {
-    return {
-      ok: false,
-      error: "Global shortcuts must use different key combinations.",
-    };
-  }
-
-  for (const [label, accelerator, callback] of entries) {
-    const registered = globalShortcut.register(accelerator, callback);
-
-    if (!registered) {
-      globalShortcut.unregisterAll();
-      return {
-        ok: false,
-        error: `Could not register ${label}: ${accelerator}. Another application may already be using it.`,
-      };
-    }
-  }
-
-  return { ok: true };
+  const result = registerShortcutSet(globalShortcut, entries);
+  shortcutRegistrationStatus = result.ok
+    ? { ok: true, message: "" }
+    : { ok: false, message: result.error };
+  return result;
 }
 
 
@@ -4476,6 +4468,7 @@ if (gotSingleInstanceLock) {
       app.setAppUserModelId("com.clarityaiassistant.desktop");
     }
     settings = loadSettings();
+    preferredWindowSize = windowSizeStore.load();
 
     /*
       Warm the persistent selected-text helper in the background.
@@ -4513,9 +4506,22 @@ if (gotSingleInstanceLock) {
     let registration = registerCurrentShortcuts(settings);
 
     if (!registration.ok) {
+      const savedShortcutError = registration.error;
       console.warn(registration.error);
       settings = structuredClone(DEFAULT_SETTINGS);
       registration = registerCurrentShortcuts(settings);
+
+      shortcutRegistrationStatus = registration.ok
+        ? {
+            ok: true,
+            message:
+              "A saved keyboard shortcut could not be registered, so Clarity restored the defaults. If a shortcut still fails, choose a different combination in Shortcuts & Settings.",
+          }
+        : {
+            ok: false,
+            message: `${savedShortcutError} The default shortcuts also failed to register. Open Shortcuts & Settings and choose different combinations.`,
+          };
+      console.warn(shortcutRegistrationStatus.message);
     }
 
     ipcMain.on("assistant-frame-ready", (_event, requestId) => {
@@ -4593,6 +4599,7 @@ if (gotSingleInstanceLock) {
     });
 
     ipcMain.handle("get-settings", () => settings);
+    ipcMain.handle("get-shortcut-status", () => shortcutRegistrationStatus);
 
     ipcMain.handle("get-app-info", () => {
       return {
@@ -4653,6 +4660,7 @@ if (gotSingleInstanceLock) {
 }
 
 app.on("will-quit", () => {
+  windowSizeStore.flush();
   stopPasteHelper();
   stopCaptureHelper();
   globalShortcut.unregisterAll();

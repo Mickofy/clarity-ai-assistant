@@ -105,6 +105,7 @@ const drawerCloseBtn = document.getElementById("drawerCloseBtn");
 const utilityDrawer = document.getElementById("utilityDrawer");
 const drawerBackdrop = document.getElementById("drawerBackdrop");
 const drawerNotice = document.getElementById("drawerNotice");
+const shortcutStatus = document.getElementById("shortcutStatus");
 
 const minimizeBtn = document.getElementById("minimizeBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -182,6 +183,32 @@ function showView(name) {
 
   if (name !== "main") {
     hideNotice();
+  }
+
+  const activeElement = document.activeElement;
+  const targetView = views[name];
+  const activeIsVisibleInTarget =
+    targetView?.contains(activeElement) &&
+    activeElement !== document.body &&
+    activeElement.getClientRects().length > 0 &&
+    !activeElement.closest(".hidden");
+
+  if (!activeIsVisibleInTarget) {
+    let initialFocus = null;
+    if (name === "main") initialFocus = sourceText;
+    else if (name === "writingResult") {
+      initialFocus = suggestionCard?.classList.contains("hidden")
+        ? document.getElementById("writingOriginal")
+        : suggestionText;
+    } else if (name === "clientReply") {
+      initialFocus = clientReplyEditorPanel && !clientReplyEditorPanel.classList.contains("hidden")
+        ? clientReplyEditor
+        : clientMessageInput;
+    } else if (name === "understandResult") initialFocus = helpReplyBtn;
+
+    if (initialFocus && !initialFocus.disabled && !initialFocus.closest(".hidden")) {
+      initialFocus.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -577,8 +604,18 @@ async function saveSettings(partial) {
   currentSettings = result.settings;
 
   updateSettingsUi();
+  try {
+    renderShortcutStatus(await window.writingAssistant.getShortcutStatus());
+  } catch {}
 
   return true;
+}
+
+function renderShortcutStatus(status) {
+  if (!shortcutStatus) return;
+  const message = String(status?.message || "").trim();
+  shortcutStatus.textContent = message;
+  shortcutStatus.classList.toggle("hidden", !message);
 }
 
 function acceleratorFromEvent(event) {
@@ -815,6 +852,8 @@ document.querySelectorAll("[data-shortcut-setting]").forEach((button) => {
 
 /* Keyboard */
 document.addEventListener("keydown", async (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
+
   if (drawerOpen && event.key === "Tab" && !capturingShortcut) {
     const items = [...utilityDrawer.querySelectorAll("button:not(:disabled), input, select, textarea, summary")]
       .filter(element => element.getClientRects().length);
@@ -896,6 +935,7 @@ document.addEventListener("keydown", async (event) => {
 
   if (
     currentView === "main" &&
+    !event.target.closest?.("input, textarea, select, [contenteditable='true']") &&
     event.altKey &&
     !event.ctrlKey &&
     !event.metaKey
@@ -920,7 +960,7 @@ document.addEventListener("keydown", async (event) => {
 
   if (
     (event.ctrlKey || event.metaKey) &&
-    event.key === "Enter" &&
+    (event.key === "Enter" || event.code === "NumpadEnter") &&
     (currentView === "clientReply" || currentView === "writingResult")
   ) {
     event.preventDefault();
@@ -942,6 +982,11 @@ window.writingAssistant.onAssistantOpened(handleAssistantOpened);
     structuredClone(DEFAULT_SETTINGS);
 
   updateSettingsUi();
+  try {
+    const status = await window.writingAssistant.getShortcutStatus();
+    renderShortcutStatus(status);
+    if (status?.message) showNotice("Check your keyboard shortcuts", status.message);
+  } catch {}
   await loadAppInfo();
   updateCharCount();
   updateConversationCount();
