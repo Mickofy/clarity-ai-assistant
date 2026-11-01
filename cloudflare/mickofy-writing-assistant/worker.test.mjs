@@ -185,3 +185,44 @@ test("maps OpenAI errors and malformed structured output to safe worker errors",
     error: "The writing service returned an invalid result.",
   });
 });
+
+test("AI prompt rewriting preserves source constraints and separates revision instructions", async () => {
+  const payload = {
+    mode: "express", purpose: "prompt", operation: "refine",
+    text: "inspect checkout muna, don't edit or deploy, plan first",
+    context: "Original notes: maybe the script causes it; still unconfirmed.",
+    refinement: "Make the task clearer. Keep all approval boundaries.",
+  };
+  const result = await invokeWorker({ payload, openAIResponse: { output_text: '{"text":"A sample draft."}' } });
+  const request = result.requests[0].body;
+  assert.match(request.instructions, /WRITING PURPOSE: AI PROMPT/);
+  assert.match(request.instructions, /Do not perform or answer the task/);
+  assert.match(request.instructions, /REFINE THE CURRENT DRAFT/);
+  assert.ok(request.input.includes(payload.text));
+  assert.ok(request.input.includes(payload.context));
+  assert.ok(request.input.includes("<revision_request>\n" + payload.refinement));
+  assert.equal(request.store, false);
+});
+
+test("idea development is opt-in and keeps suggestions distinct from established facts", async () => {
+  const developed = await invokeWorker({
+    payload: { mode: "express", operation: "develop", text: "make the client replies continuous" },
+    openAIResponse: { output_text: '{"text":"Ideas to consider."}' },
+  });
+  assert.match(developed.requests[0].body.instructions, /OPERATION: DEVELOP AN IDEA/);
+  assert.match(developed.requests[0].body.instructions, /Keep suggestions distinct from established facts/);
+  const ordinary = await invokeWorker({
+    payload: { mode: "express", text: "maybe cache issue. checking pa" },
+    openAIResponse: { output_text: '{"text":"The cache may be involved. I am still checking."}' },
+  });
+  assert.ok(!ordinary.requests[0].body.instructions.includes("OPERATION: DEVELOP AN IDEA"));
+  assert.match(ordinary.requests[0].body.instructions, /WRITING PURPOSE: MESSAGE/);
+});
+
+test("new writing controls reject invalid requests before calling OpenAI", async () => {
+  for (const extra of [{ purpose: "unknown" }, { operation: "execute" }, { refinement: "x".repeat(2001) }, { context: "x".repeat(40001) }]) {
+    const result = await invokeWorker({ payload: { mode: "express", text: "notes", ...extra }, openAIResponse: {} });
+    assert.equal(result.response.status, 400);
+    assert.equal(result.requests.length, 0);
+  }
+});

@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("writingAssistant", {
   refreshInput: (source) => ipcRenderer.invoke("refresh-input", source),
 
   improveText: (payload) => ipcRenderer.invoke("improve-text", payload),
+  cancelRequest: (requestId) => ipcRenderer.invoke("cancel-writing-request", requestId),
+  toggleMaximize: () => ipcRenderer.invoke("toggle-maximize-window"),
 
   copyResult: (text) => ipcRenderer.invoke("copy-result", text),
 

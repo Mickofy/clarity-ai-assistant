@@ -10,6 +10,11 @@ Clarity is a personal portfolio project built with **Electron, JavaScript, Cloud
 
 ## Preview
 
+The writing workspace improvements on this branch are unreleased and need a new
+manual Electron release after review. Screenshots below show the released
+interface. See [the workspace review and release notes](docs/writing-workspaces.md)
+for the new flows and validation.
+
 ![Clarity AI Assistant](docs/images/clarity-home.png)
 
 ---
@@ -19,6 +24,11 @@ Clarity is a personal portfolio project built with **Electron, JavaScript, Cloud
 ### Express Clearly
 
 Turn rough thoughts, incomplete sentences, Taglish, or unclear English into a cleaner and more natural message while preserving the intended meaning.
+
+The new workspace offers **Message** and **AI Prompt** purposes, editable saved
+drafts, inline clarification, follow-up refinement, and undo for AI revisions.
+**Help me develop this** offers clearly labelled suggestions separately from a
+faithful rewrite.
 
 ![Clarity Express Clearly](docs/images/clarity-express.png)
 
@@ -32,6 +42,11 @@ Break down difficult client messages, technical wording, or unfamiliar terms int
 
 Turn a client message and an optional rough response into multiple professional reply options that can be reviewed and edited before sending.
 
+Keep separate conversations on this device and add the next client message inside
+Client Reply. The first draft opens directly for editing, with alternatives
+available on demand. Copied drafts are distinguished from replies explicitly
+marked as sent.
+
 ![Clarity Client Reply](docs/images/clarity-client-reply.png)
 
 ### Grammar Only
@@ -41,6 +56,11 @@ Correct grammar, spelling, punctuation, and minor awkward wording while keeping 
 ### Replace Selection
 
 After reviewing a result, Clarity can return the approved text directly to the selected editable text in the source application.
+
+Copy keeps the workspace open and reports clipboard failures. Replace Selection
+briefly hands focus to the destination, then shows the preserved workspace without
+taking focus away from the destination. Windows confirms that the paste shortcut
+was sent; verify the resulting text in the destination editor.
 
 Replace Selection is intended for editable controls such as:
 
@@ -129,6 +149,9 @@ For reliability:
 - the renderer uses a frame-ready handshake to avoid stale content and visual flashes.
 
 The small additional delay during a cross-monitor switch is intentional.
+
+Drafts are saved locally as you edit, so recreating the window can restore the
+workspace. The window can be resized or expanded for longer writing.
 
 ---
 
@@ -261,6 +284,11 @@ Recommended ignored local files include:
 ---
 
 ## Run in Development
+
+Run focused unit, Worker contract, and isolated Electron renderer tests with
+npm test. Renderer tests use synthetic inputs, mocked IPC, and a temporary
+profile; they do not call OpenAI or paste into real applications. On restricted
+Windows runners, Electron needs access to its runtime DLLs and temporary profile.
 
 ```powershell
 npm start
