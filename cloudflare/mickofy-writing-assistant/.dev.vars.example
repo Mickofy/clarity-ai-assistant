@@ -1,0 +1,5 @@
+# Local Cloudflare Worker development only. Copy to .dev.vars and fill values privately.
+# Never commit populated .dev.vars files.
+OPENAI_API_KEY=your_own_openai_api_key_here
+WRITING_APP_TOKEN=match_the_desktop_WRITING_APP_TOKEN
+OPENAI_MODEL=gpt-6-luna
