@@ -238,13 +238,6 @@ The root [`.env.example`](.env.example) documents the two values. **The desktop 
 
 The OpenAI API key belongs **only to your own Cloudflare Worker secrets**, never in the desktop environment or installer. For a complete independent setup see [docs/COMMUNITY_SETUP.md](docs/COMMUNITY_SETUP.md).
 
-The Electron main process reads the following environment variables:
-
-```text
-WRITING_API_URL
-WRITING_APP_TOKEN
-```
-
 ### Purpose
 
 | Variable            | Purpose                                                        |
