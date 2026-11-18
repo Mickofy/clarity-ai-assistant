@@ -21,3 +21,14 @@ Thumbs.db
 # Second Brain - local automation configuration
 /.codex/second-brain-automation.json
 .artifacts/
+
+# Private configuration, credentials and local data
+!.env.example
+!cloudflare/mickofy-writing-assistant/.dev.vars.example
+*.pfx
+*.pem
+*.key
+*.db
+*.sqlite
+*.jsonl
+*.zip

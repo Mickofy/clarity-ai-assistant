@@ -1,10 +1,14 @@
 # Clarity AI Assistant
 
+> **Unofficial community project.** Not affiliated with or endorsed by OpenAI. The Windows desktop app can be configured with your own backend and credentials; its default Cloudflare deployment name is a project example, not access to the author's account.
+
 **A Windows desktop AI writing assistant for clearer everyday and professional communication.**
 
 Clarity is a personal portfolio project built with **Electron, JavaScript, Cloudflare Workers, and the OpenAI API**. It works directly with selected text in Windows applications so users can rewrite, understand, correct, or reply to text without constantly moving content between apps.
 
 **Current version:** `1.0.8`
+
+**For community users:** Follow the [Independent setup guide](docs/COMMUNITY_SETUP.md) to deploy a private backend and configure your own app credentials. The public repository does **not** provide access to the author's Cloudflare Worker or AI account.
 
 ---
 
@@ -223,12 +227,16 @@ npm install
 
 ## Desktop Environment Variables
 
-The Electron main process reads the following environment variables:
+The Electron main process reads the following environment variables (not the OpenAI API key):
 
 ```text
 WRITING_API_URL
 WRITING_APP_TOKEN
 ```
+
+The root [`.env.example`](.env.example) documents the two values. **The desktop app currently reads process environment variables; copying the example to `.env` alone does not configure the application.** For a development PowerShell session, set both environment variables before running `npm start`. For an installed Windows app, configure user environment variables and restart the app (or sign out/in to refresh the environment).
+
+The OpenAI API key belongs **only to your own Cloudflare Worker secrets**, never in the desktop environment or installer. For a complete independent setup see [docs/COMMUNITY_SETUP.md](docs/COMMUNITY_SETUP.md).
 
 ### Purpose
 
@@ -288,12 +296,16 @@ Expected release artifacts include:
 
 ```text
 dist/
-└─ Clarity AI Assistant Setup 1.0.7.exe
+└─ Clarity AI Assistant Setup 1.0.8.exe
 ```
 
 `dist/` remains outside source control.
 
 ---
+
+## Automated Community Builds
+
+GitHub Actions runs source/Worker tests and generates an **unsigned Windows installer artifact** for pull requests and `main`. Download it from a successful [Community CI workflow](https://github.com/Mickofy/clarity-ai-assistant/actions/workflows/community-ci.yml). These artifacts are temporary CI downloads, not signed stable releases. A deployed backend with your own credentials is still required.
 
 ## Manual Releases
 
@@ -417,3 +429,9 @@ confirm normal keyboard state afterward
 **Micko**
 
 Clarity AI Assistant is a personal desktop productivity project focused on clearer professional communication and practical Windows-native workflows.
+
+## Community reuse and licensing
+
+Licensed under the [MIT License](LICENSE). The desktop app may be reused with your own configuration, but you must provide your own Cloudflare Worker, application token, and OpenAI API key. Documentation and CI do not authorize access to any existing author's deployment or account. Please do not attach real user text, secrets, production tokens, or private logs to public issues.
+
+**Privacy note:** Older public Git commits may disclose the author's historical commit email address. Updating repository files does not rewrite that history. A full secrets/history audit and live independent installation are not claimed by this release-preparation change.

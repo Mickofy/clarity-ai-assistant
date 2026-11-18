@@ -6,7 +6,13 @@ const path = require("node:path");
 test("Electron conversation and writing flows", { timeout: 45000 }, async () => {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require("electron"), [path.join(__dirname, "support/conversation-check.cjs")], {
+  // Only synthetic CI checks use --no-sandbox on Linux runners that lack the
+  // Chromium SUID sandbox helper. Production Electron app settings are unchanged.
+  const testEntry = path.join(__dirname, "support/conversation-check.cjs");
+  const args = process.env.CI === "true" && process.platform === "linux"
+    ? ["--no-sandbox", testEntry]
+    : [testEntry];
+  const child = spawn(require("electron"), args, {
     env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
